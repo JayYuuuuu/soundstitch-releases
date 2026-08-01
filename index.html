@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0A6CFF">
+<title>声拼 · 控制台</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+  :root{
+    --accent:#0A6CFF; --ok:#34C759; --warn:#FF9F0A; --stop:#FF3B30;
+    --bg:#F1F1F3; --card:#FFF; --line:rgba(0,0,0,.12); --line2:rgba(0,0,0,.06);
+    --t1:#1D1D1F; --t2:#3A3A3C; --t3:#7C7C80; --field:#FFF;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{--bg:#17171A;--card:#202023;--line:rgba(255,255,255,.10);--line2:rgba(255,255,255,.06);
+          --t1:#F2F2F5;--t2:#E6E6EA;--t3:#8E8E93;--field:#2C2C2F;--accent:#0A84FF}
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--t1);
+       font:14px/1.5 -apple-system,"SF Pro Text","PingFang SC",system-ui,sans-serif;
+       -webkit-font-smoothing:antialiased;padding-top:env(safe-area-inset-top)}
+  .mono{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:12px}
+  .wrap{max-width:720px;margin:0 auto;padding:16px 16px 40px}
+  header{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+  header h1{font-size:17px;font-weight:600;margin:0;letter-spacing:-.01em}
+  .grow{flex:1}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;
+        padding:14px;margin-bottom:12px}
+  .cap{font-size:11px;font-weight:600;color:var(--t3);margin-bottom:8px}
+  label{display:block;font-size:12px;color:var(--t3);margin:8px 0 4px}
+  input[type=text],input[type=password],input[type=email]{
+    width:100%;height:34px;padding:0 10px;border:1px solid var(--line);border-radius:6px;
+    background:var(--field);color:var(--t1);font-size:14px}
+  button{font:inherit;border:1px solid var(--line);background:var(--card);color:var(--t2);
+         height:34px;padding:0 14px;border-radius:7px;cursor:pointer}
+  button:hover{border-color:var(--accent)}
+  button:disabled{opacity:.4;cursor:default;border-color:var(--line)}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+  button.round{width:44px;height:44px;padding:0;border-radius:50%;font-size:16px}
+  .row{display:flex;align-items:center;gap:10px}
+  .devices{display:flex;flex-direction:column;gap:6px}
+  .dev{display:flex;align-items:center;gap:10px;padding:10px;border-radius:8px;
+       border:1px solid transparent;cursor:pointer}
+  .dev:hover{background:var(--line2)}
+  .dev.sel{background:color-mix(in srgb,var(--accent) 12%,transparent);border-color:var(--accent)}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--t3);flex:none}
+  .dot.on{background:var(--ok)}
+  .badge{font-size:11px;padding:2px 7px;border-radius:20px;background:var(--line2);color:var(--t3)}
+  .badge.bt{background:color-mix(in srgb,var(--accent) 18%,transparent);color:var(--accent);font-weight:600}
+  .items{display:flex;flex-direction:column;gap:4px;max-height:280px;overflow:auto}
+  .item{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:7px;cursor:pointer}
+  .item:hover{background:var(--line2)}
+  .item.sel{background:color-mix(in srgb,var(--accent) 12%,transparent)}
+  .muted{color:var(--t3)}
+  .bar{width:100%;height:4px;background:var(--line);border-radius:2px;overflow:hidden;margin:10px 0 4px}
+  .bar>i{display:block;height:100%;background:var(--accent);width:0}
+  input[type=range]{width:100%;accent-color:var(--accent)}
+  .err{color:var(--warn);font-size:12px;margin-top:8px;white-space:pre-wrap}
+  .hide{display:none}
+  .center{text-align:center;padding:26px 0;color:var(--t3);font-size:13px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>声拼 · 控制台</h1>
+  <span class="grow"></span>
+  <span id="link" class="badge">未连接</span>
+  <button id="out" class="hide" style="height:28px;padding:0 10px">退出</button>
+</header>
+
+<!-- 登录 -->
+<div id="loginCard" class="card">
+  <div class="cap">连接控制端</div>
+  <label>服务器</label><input id="url" type="text" spellcheck="false">
+  <label>账号</label><input id="email" type="email" autocomplete="username">
+  <label>密码</label><input id="pass" type="password" autocomplete="current-password">
+  <div class="row" style="margin-top:12px">
+    <button id="login" class="primary">登录</button>
+    <span class="muted mono">同一账号登录的所有 Mac 都会出现在这里</span>
+  </div>
+  <div id="loginErr" class="err"></div>
+</div>
+
+<!-- 设备 -->
+<div id="devCard" class="card hide">
+  <div class="cap">设备</div>
+  <div id="devices" class="devices"></div>
+</div>
+
+<!-- 播放器 -->
+<div id="playCard" class="card hide">
+  <div class="cap">播放</div>
+  <div id="nowName" style="font-weight:600">未选择</div>
+  <div id="nowOut" class="mono muted" style="margin-top:2px"></div>
+  <div class="bar"><i id="prog"></i></div>
+  <div class="row mono muted"><span id="tCur">0:00</span><span class="grow"></span><span id="tAll">0:00</span></div>
+  <div class="row" style="justify-content:center;gap:14px;margin:12px 0 6px">
+    <button id="bStop" class="round" title="停止">■</button>
+    <button id="bPlay" class="round primary" title="播放 / 暂停">▶</button>
+    <button id="bBack" class="round" title="后退 15 秒">↺</button>
+  </div>
+  <label>音量</label>
+  <input id="vol" type="range" min="0" max="100" value="100">
+  <div id="playErr" class="err"></div>
+</div>
+
+<!-- 曲目 -->
+<div id="itemCard" class="card hide">
+  <div class="cap">这台机器上的成品</div>
+  <div id="items" class="items"></div>
+</div>
+
+</div>
+<script>
+/* 声拼控制台
+ *
+ * 单文件、零依赖、零构建 —— 和 Mac 端一样的原则。
+ *
+ * 它只写记录，不搬音频：播放发生在 Mac 上，那里才有音频文件和蓝牙音箱。
+ * 遥控一小时的音频不该等于搬运一小时的音频。
+ */
+const $ = s => document.querySelector(s);
+const S = {
+  url: localStorage.ssUrl || 'https://baihe.yujiev.com:54812',
+  token: localStorage.ssToken || '',
+  players: [], items: [], sel: null, selItem: null, es: null, clientId: null,
+};
+
+const fmt = s => {
+  s = Math.max(0, Math.floor(s || 0));
+  const h = (s / 3600) | 0, m = ((s % 3600) / 60) | 0, x = s % 60;
+  return h ? `${h}:${String(m).padStart(2, '0')}:${String(x).padStart(2, '0')}`
+           : `${m}:${String(x).padStart(2, '0')}`;
+};
+
+async function api(path, opts = {}) {
+  const r = await fetch(S.url + path, {
+    ...opts,
+    headers: { 'Content-Type': 'application/json',
+               ...(S.token ? { Authorization: S.token } : {}), ...(opts.headers || {}) },
+  });
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(body.message || `HTTP ${r.status}`);
+  return body;
+}
+
+/* ---------- 登录 ---------- */
+$('#url').value = S.url;
+$('#email').value = localStorage.ssEmail || '';
+
+$('#login').onclick = async () => {
+  $('#loginErr').textContent = '';
+  S.url = $('#url').value.replace(/\/+$/, '');
+  try {
+    const r = await api('/api/collections/ss_users/auth-with-password', {
+      method: 'POST',
+      body: JSON.stringify({ identity: $('#email').value, password: $('#pass').value }),
+    });
+    S.token = r.token;
+    localStorage.ssUrl = S.url;
+    localStorage.ssToken = S.token;
+    localStorage.ssEmail = $('#email').value;
+    start();
+  } catch (e) {
+    $('#loginErr').textContent = String(e.message || e);
+  }
+};
+
+$('#out').onclick = () => {
+  localStorage.removeItem('ssToken');
+  location.reload();
+};
+
+/* ---------- 启动 ---------- */
+async function start() {
+  $('#loginCard').classList.add('hide');
+  $('#devCard').classList.remove('hide');
+  $('#out').classList.remove('hide');
+  try {
+    await loadPlayers();
+    connectRealtime();
+  } catch (e) {
+    // An expired token looks exactly like a wrong password unless it's said.
+    if (String(e.message).includes('401') || String(e.message).includes('403')) {
+      localStorage.removeItem('ssToken');
+      location.reload();
+    }
+    $('#loginErr').textContent = String(e.message || e);
+  }
+}
+
+async function loadPlayers() {
+  const r = await api('/api/collections/ss_players/records?perPage=50&sort=-updated');
+  S.players = r.items || [];
+  if (!S.sel && S.players.length) selectPlayer(S.players[0].id);
+  renderPlayers();
+}
+
+/* A machine that vanished without saying goodbye still has online=true, so
+ * freshness of the heartbeat is what actually decides "online". */
+const isLive = p => p.online && (Date.now() - new Date(p.lastSeen || 0).getTime() < 60000);
+
+function renderPlayers() {
+  const box = $('#devices');
+  if (!S.players.length) {
+    box.innerHTML = '<div class="center">还没有 Mac 连上来。<br>在 Mac 版声拼里用同一个账号登录即可。</div>';
+    return;
+  }
+  box.innerHTML = '';
+  for (const p of S.players) {
+    const out = p.outputDevice || {};
+    const el = document.createElement('div');
+    el.className = 'dev' + (p.id === S.sel ? ' sel' : '');
+    el.innerHTML =
+      `<span class="dot ${isLive(p) ? 'on' : ''}"></span>
+       <span style="flex:1;min-width:0">
+         <div style="font-weight:600">${esc(p.name || '未命名 Mac')}</div>
+         <div class="mono muted">${out.name ? esc(out.name) : '未知输出'}${
+              out.sampleRate ? ' · ' + Math.round(out.sampleRate / 1000) + ' kHz' : ''}</div>
+       </span>
+       ${out.bluetooth ? '<span class="badge bt">蓝牙</span>'
+                       : `<span class="badge">${esc(out.transport || '')}</span>`}`;
+    el.onclick = () => selectPlayer(p.id);
+    box.appendChild(el);
+  }
+}
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
+async function selectPlayer(id) {
+  S.sel = id; S.selItem = null;
+  renderPlayers(); renderNow();
+  $('#playCard').classList.remove('hide');
+  $('#itemCard').classList.remove('hide');
+  const r = await api(`/api/collections/ss_items/records?perPage=200&sort=-created&filter=` +
+                      encodeURIComponent(`player='${id}'`));
+  S.items = r.items || [];
+  renderItems();
+}
+
+function renderItems() {
+  const box = $('#items');
+  if (!S.items.length) {
+    box.innerHTML = '<div class="center">这台机器还没有导出过成品。<br>在 Mac 上导出一次就会出现在这里。</div>';
+    return;
+  }
+  box.innerHTML = '';
+  for (const it of S.items) {
+    const el = document.createElement('div');
+    el.className = 'item' + (it.id === S.selItem ? ' sel' : '');
+    el.innerHTML = `<span style="flex:1;min-width:0"><div>${esc(it.name)}</div>
+      <div class="mono muted">${fmt(it.duration)} · ${(it.fileSize / 1048576).toFixed(1)} MB</div></span>
+      <button style="height:28px;padding:0 12px">播放</button>`;
+    el.querySelector('button').onclick = ev => { ev.stopPropagation(); play(it); };
+    el.onclick = () => { S.selItem = it.id; renderItems(); };
+    box.appendChild(el);
+  }
+}
+
+function current() { return S.players.find(p => p.id === S.sel); }
+
+function renderNow() {
+  const p = current();
+  if (!p) return;
+  const out = p.outputDevice || {};
+  $('#nowName').textContent = p.currentName || '未选择';
+  $('#nowOut').textContent = out.name
+    ? `${out.name}（${out.transport || ''}${out.bluetooth ? ' · 蓝牙' : ''}）` : '';
+  const d = p.duration || 0, c = p.position || 0;
+  $('#prog').style.width = d ? (c / d * 100) + '%' : '0';
+  $('#tCur').textContent = fmt(c);
+  $('#tAll').textContent = fmt(d);
+  $('#bPlay').textContent = p.state === 'playing' ? '❚❚' : '▶';
+  $('#vol').value = Math.round((p.volume ?? 1) * 100);
+  $('#link').textContent = isLive(p) ? '在线' : '离线';
+  $('#link').className = 'badge' + (isLive(p) ? ' bt' : '');
+}
+
+/* ---------- 指令 ---------- */
+async function cmd(action, payload = {}) {
+  if (!S.sel) return;
+  $('#playErr').textContent = '';
+  try {
+    await api('/api/collections/ss_commands/records', {
+      method: 'POST',
+      body: JSON.stringify({ player: S.sel, action, payload, status: 'pending' }),
+    });
+  } catch (e) {
+    $('#playErr').textContent = String(e.message || e);
+  }
+}
+
+const play = it => { S.selItem = it.id; renderItems();
+                     cmd('play', { localPath: it.localPath, name: it.name, itemId: it.id }); };
+$('#bPlay').onclick = () => {
+  const p = current();
+  if (p && p.state === 'playing') return cmd('pause');
+  if (p && p.currentItem) return cmd('play');
+  const it = S.items.find(i => i.id === S.selItem) || S.items[0];
+  if (it) play(it);
+};
+$('#bStop').onclick = () => cmd('stop');
+$('#bBack').onclick = () => {
+  const p = current();
+  cmd('seek', { position: Math.max(0, (p?.position || 0) - 15) });
+};
+$('#vol').onchange = e => cmd('volume', { volume: e.target.value / 100 });
+
+/* ---------- 实时 ---------- */
+/* EventSource can't send an Authorization header, and it doesn't need to:
+ * PocketBase authenticates the *subscription* POST and binds it to the clientId
+ * the stream handed out. Same reason this page works cross-origin. */
+function connectRealtime() {
+  if (S.es) S.es.close();
+  const es = new EventSource(S.url + '/api/realtime');
+  S.es = es;
+  es.addEventListener('PB_CONNECT', async ev => {
+    S.clientId = JSON.parse(ev.data).clientId;
+    await api('/api/realtime', {
+      method: 'POST',
+      body: JSON.stringify({ clientId: S.clientId, subscriptions: ['ss_players', 'ss_items'] }),
+    });
+    $('#link').textContent = '在线';
+  });
+  es.addEventListener('ss_players', ev => {
+    const { action, record } = JSON.parse(ev.data);
+    const i = S.players.findIndex(p => p.id === record.id);
+    if (action === 'delete') { if (i >= 0) S.players.splice(i, 1); }
+    else if (i >= 0) S.players[i] = record;
+    else S.players.push(record);
+    if (!S.sel) S.sel = record.id;
+    renderPlayers(); renderNow();
+  });
+  es.addEventListener('ss_items', ev => {
+    const { action, record } = JSON.parse(ev.data);
+    if (record.player !== S.sel) return;
+    const i = S.items.findIndex(x => x.id === record.id);
+    if (action === 'delete') { if (i >= 0) S.items.splice(i, 1); }
+    else if (i >= 0) S.items[i] = record;
+    else S.items.unshift(record);
+    renderItems();
+  });
+  // The browser reconnects an EventSource on its own, but a token that expired
+  // while the tab slept needs the subscription re-bound, which only happens on
+  // a fresh PB_CONNECT — so let it reconnect rather than papering over errors.
+  es.onerror = () => { $('#link').textContent = '重连中…'; };
+}
+
+/* Heartbeats are 15 s apart; refresh liveness in between so a Mac that dropped
+ * off doesn't keep showing a green dot. */
+setInterval(renderNow, 5000);
+
+if (S.token) start();
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+</script>
+</body>
+</html>
