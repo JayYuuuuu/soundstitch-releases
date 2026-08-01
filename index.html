@@ -57,6 +57,9 @@
   .bar{width:100%;height:4px;background:var(--line);border-radius:2px;overflow:hidden;margin:10px 0 4px}
   .bar>i{display:block;height:100%;background:var(--accent);width:0}
   input[type=range]{width:100%;accent-color:var(--accent)}
+  select,input[type=text].sm{height:32px;border:1px solid var(--line);border-radius:6px;
+    background:var(--field);color:var(--t1);padding:0 8px;font-size:13px}
+  #schedCard input[type=text]{height:32px;padding:0 8px;font-size:13px}
   .err{color:var(--warn);font-size:12px;margin-top:8px;white-space:pre-wrap}
   .hide{display:none}
   .center{text-align:center;padding:26px 0;color:var(--t3);font-size:13px}
@@ -108,6 +111,26 @@
   <div id="playErr" class="err"></div>
 </div>
 
+<!-- 定时 -->
+<div id="schedCard" class="card hide">
+  <div class="cap">定时播放（东八区）</div>
+  <div id="scheds" class="items" style="max-height:200px"></div>
+  <div style="border-top:1px solid var(--line2);margin-top:10px;padding-top:10px">
+    <div class="row" style="flex-wrap:wrap;gap:8px">
+      <select id="sMode" style="height:32px"><option value="daily">每天</option><option value="window">时段内持续</option><option value="once">指定日期一次</option></select>
+      <input id="sStart" type="text" value="22:00" style="width:74px" placeholder="起 HH:MM">
+      <input id="sEnd" type="text" value="23:00" style="width:74px;display:none" placeholder="止 HH:MM">
+      <input id="sDate" type="text" style="width:110px;display:none" placeholder="yyyy-MM-dd">
+      <input id="sPlay" type="text" value="30" style="width:66px" placeholder="每次秒">
+      <input id="sRepeat" type="text" value="1" style="width:52px" placeholder="次数">
+      <input id="sGap" type="text" value="60" style="width:66px" placeholder="间隔秒">
+      <button id="sAdd" class="primary">添加</button>
+    </div>
+    <div class="muted mono" style="margin-top:6px">对当前选中的成品生效；定时由 Mac 判定，手机关掉也照常播</div>
+    <div id="schedErr" class="err"></div>
+  </div>
+</div>
+
 <!-- 曲目 -->
 <div id="itemCard" class="card hide">
   <div class="cap">这台机器上的成品</div>
@@ -127,7 +150,7 @@ const $ = s => document.querySelector(s);
 const S = {
   url: localStorage.ssUrl || 'https://baihe.yujiev.com:54812',
   token: localStorage.ssToken || '',
-  players: [], items: [], sel: null, selItem: null, es: null, clientId: null,
+  players: [], items: [], scheds: [], sel: null, selItem: null, es: null, clientId: null,
 };
 
 const fmt = s => {
@@ -237,7 +260,9 @@ async function selectPlayer(id) {
   S.sel = id; S.selItem = null;
   renderPlayers(); renderNow();
   $('#playCard').classList.remove('hide');
+  $('#schedCard').classList.remove('hide');
   $('#itemCard').classList.remove('hide');
+  loadScheds();
   const r = await api(`/api/collections/ss_items/records?perPage=200&sort=-created&filter=` +
                       encodeURIComponent(`player='${id}'`));
   S.items = r.items || [];
@@ -323,6 +348,74 @@ $('#bBack').onclick = () => {
 };
 $('#vol').onchange = e => cmd('volume', { volume: e.target.value / 100 });
 
+/* ---------- 定时 ---------- */
+const MODE = { daily: '每天', window: '时段', once: '一次' };
+
+async function loadScheds() {
+  const r = await api('/api/collections/ss_schedules/records?perPage=200&sort=startTime&filter=' +
+                      encodeURIComponent(`player='${S.sel}'`));
+  S.scheds = r.items || [];
+  renderScheds();
+}
+
+function renderScheds() {
+  const box = $('#scheds');
+  if (!S.scheds || !S.scheds.length) {
+    box.innerHTML = '<div class="center">还没有定时规则</div>';
+    return;
+  }
+  box.innerHTML = '';
+  for (const s of S.scheds) {
+    const when = s.mode === 'window' ? `${s.startTime}–${s.endTime}`
+               : s.mode === 'once' ? `${s.date} ${s.startTime}` : `每天 ${s.startTime}`;
+    const how = s.mode === 'window' ? '持续'
+              : `${s.playSeconds || 0}s × ${s.repeatCount || 1}${s.gapSeconds ? ' 间隔' + s.gapSeconds + 's' : ''}`;
+    const el = document.createElement('div');
+    el.className = 'item';
+    el.innerHTML = `<span style="flex:1;min-width:0">
+        <div>${esc(s.itemName || '(未指定)')}</div>
+        <div class="mono muted">${esc(when)} · ${esc(how)}</div></span>
+      <span class="badge${s.enabled ? ' bt' : ''}">${s.enabled ? '启用' : '停用'}</span>
+      <button style="height:28px;padding:0 10px">删</button>`;
+    el.querySelector('.badge').onclick = () => toggleSched(s);
+    el.querySelector('button').onclick = () => delSched(s);
+    box.appendChild(el);
+  }
+}
+
+$('#sMode').onchange = e => {
+  $('#sEnd').style.display = e.target.value === 'window' ? '' : 'none';
+  $('#sDate').style.display = e.target.value === 'once' ? '' : 'none';
+  const per = e.target.value === 'window';
+  for (const id of ['#sPlay', '#sRepeat', '#sGap']) $(id).style.display = per ? 'none' : '';
+};
+
+$('#sAdd').onclick = async () => {
+  $('#schedErr').textContent = '';
+  const it = S.items.find(i => i.id === S.selItem) || S.items[0];
+  if (!it) { $('#schedErr').textContent = '先在下面选一个成品'; return; }
+  try {
+    await api('/api/collections/ss_schedules/records', {
+      method: 'POST',
+      body: JSON.stringify({
+        player: S.sel, item: it.id, itemName: it.name, localPath: it.localPath,
+        enabled: true, mode: $('#sMode').value,
+        date: $('#sDate').value, startTime: $('#sStart').value, endTime: $('#sEnd').value,
+        weekdays: [],
+        playSeconds: Number($('#sPlay').value) || 0,
+        repeatCount: Number($('#sRepeat').value) || 1,
+        gapSeconds: Number($('#sGap').value) || 0,
+      }),
+    });
+    loadScheds();
+  } catch (e) { $('#schedErr').textContent = String(e.message || e); }
+};
+
+const toggleSched = s => api(`/api/collections/ss_schedules/records/${s.id}`,
+  { method: 'PATCH', body: JSON.stringify({ enabled: !s.enabled }) }).then(loadScheds);
+const delSched = s => api(`/api/collections/ss_schedules/records/${s.id}`,
+  { method: 'DELETE' }).then(loadScheds);
+
 /* ---------- 实时 ---------- */
 /* EventSource can't send an Authorization header, and it doesn't need to:
  * PocketBase authenticates the *subscription* POST and binds it to the clientId
@@ -335,7 +428,7 @@ function connectRealtime() {
     S.clientId = JSON.parse(ev.data).clientId;
     await api('/api/realtime', {
       method: 'POST',
-      body: JSON.stringify({ clientId: S.clientId, subscriptions: ['ss_players', 'ss_items'] }),
+      body: JSON.stringify({ clientId: S.clientId, subscriptions: ['ss_players', 'ss_items', 'ss_schedules'] }),
     });
     setLink('已连接', true);
   });
@@ -348,6 +441,7 @@ function connectRealtime() {
     if (!S.sel) S.sel = record.id;
     renderPlayers(); renderNow();
   });
+  es.addEventListener('ss_schedules', () => { if (S.sel) loadScheds(); });
   es.addEventListener('ss_items', ev => {
     const { action, record } = JSON.parse(ev.data);
     if (record.player !== S.sel) return;
