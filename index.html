@@ -416,6 +416,12 @@ function nextFire(s, now = new Date()) {
   }
   return null;
 }
+/* 五格电平条：数字读不出「大概多响」，格子可以 */
+const meter = lv => {
+  const n = Math.max(0, Math.min(5, Math.round((lv || 0) * 7)));
+  return '▁▃▅▆█'.slice(0, n).padEnd(0) || '▁';
+};
+
 const clock = m => `${String((m / 60) | 0).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
 const sayWhen = f => !f ? '不会再响' : f.expired ? '已完成' : f.live ? '正在响'
   : f.days === 0 ? `今天 ${clock(f.at)}` : f.days === 1 ? `明天 ${clock(f.at)}`
@@ -509,7 +515,13 @@ function renderNow() {
   else if (S.cmd === 'pending') setBadge('下发中', 'acc', true);
   else if (S.cmd === 'slow') setBadge('未回应', 'bt', true);
   else if (S.cmd === 'fail') setBadge(S.failMsg || '失败 · 重试', 'bad');
-  else setBadge(p.state === 'playing' ? '播放中' : '已暂停', p.state === 'playing' ? 'ok' : '');
+  else if (p.state === 'playing') {
+    // 「播放中」本身不证明有声音：解码失败、停滞、静音、或这段本就是空白，
+    // 从外面看全都一样。所以分开说，并把实测电平画出来。
+    if (p.audible) setBadge(`有声 ${meter(p.level)}`, 'ok');
+    else setBadge(p.note || '无声', 'bt');
+  }
+  else setBadge('已暂停', '');
 }
 
 function setBadge(text, kind, spinning) {
