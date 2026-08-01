@@ -416,6 +416,17 @@ function nextFire(s, now = new Date()) {
   }
   return null;
 }
+/* 两端版本不齐时不要撒谎。
+ * 旧版 Mac 根本不上报 audible，而 PocketBase 的布尔字段默认存 false ——
+ * 照着渲染就会给一台正在正常播放的机器打上「无声」。分不清「上报了 false」
+ * 和「压根没上报」时，就退回到旧的说法，别编。 */
+const atLeast = (v, min) => {
+  const a = String(v || '0').split('.').map(Number), b = min.split('.').map(Number);
+  for (let i = 0; i < 3; i++) { if ((a[i] || 0) !== (b[i] || 0)) return (a[i] || 0) > (b[i] || 0); }
+  return true;
+};
+const reportsAudio = p => atLeast(p.appVersion, '0.11.0');
+
 /* 五格电平条：数字读不出「大概多响」，格子可以 */
 const meter = lv => {
   const n = Math.max(0, Math.min(5, Math.round((lv || 0) * 7)));
@@ -518,7 +529,8 @@ function renderNow() {
   else if (p.state === 'playing') {
     // 「播放中」本身不证明有声音：解码失败、停滞、静音、或这段本就是空白，
     // 从外面看全都一样。所以分开说，并把实测电平画出来。
-    if (p.audible) setBadge(`有声 ${meter(p.level)}`, 'ok');
+    if (!reportsAudio(p)) setBadge('播放中', 'ok');       // 这台 Mac 太旧，测不了
+    else if (p.audible) setBadge(`有声 ${meter(p.level)}`, 'ok');
     else setBadge(p.note || '无声', 'bt');
   }
   else setBadge('已暂停', '');
