@@ -117,6 +117,18 @@ input[type=range]{width:100%;accent-color:var(--accent);height:44px}
            text-overflow:ellipsis;white-space:nowrap}
 .tinput{width:100%;height:48px;border-radius:12px;background:var(--card2);border:0;
         padding:0 14px;font-size:16px;color:var(--t1);margin-bottom:10px}
+/* 选播放内容：多选按点选顺序连着放，所以序号本身就是信息 */
+.picklist{max-height:190px;overflow-y:auto;-webkit-overflow-scrolling:touch}
+.pick{display:flex;align-items:center;gap:10px;min-height:46px;width:100%;text-align:left}
+.pick+.pick{border-top:.5px solid var(--line)}
+.pick .ord{flex:none;width:22px;height:22px;border-radius:50%;background:var(--line);
+           color:var(--t3);font-size:11px;font-weight:700;display:flex;
+           align-items:center;justify-content:center}
+.pick.on .ord{background:var(--accent);color:#fff}
+.pick .pname{flex:1;min-width:0;font-size:15px;overflow:hidden;
+             text-overflow:ellipsis;white-space:nowrap}
+.pick.on .pname{color:var(--accent);font-weight:500}
+.pick .plen{flex:none;font-size:12px;color:var(--t3)}
 
 /* 定时规则：时间当主角，24 小时条把「什么时候」变成位置问题（3e） */
 .rule{background:var(--card);border-radius:16px;padding:14px;margin-bottom:12px}
@@ -317,6 +329,13 @@ nav svg{width:22px;height:22px;fill:currentColor}
 <div id="sheet" class="sheet hide">
   <div class="grab"></div>
   <h2>新建定时</h2>
+  <!-- 播什么放在最前面：以前它是隐式的（用「当前选中的那个成品」），
+       屏幕上根本没有一处说这条规则会响哪一段。 -->
+  <div class="fcard" id="grpPick" style="padding:8px 12px">
+    <div class="cap" id="pickCap">播放内容</div>
+    <div id="pickList" class="picklist"></div>
+  </div>
+
   <div class="seg" id="mSeg">
     <button data-m="daily" class="sel">每天</button>
     <button data-m="once">指定日期</button>
@@ -847,6 +866,16 @@ async function loadScheds() {
   S.scheds = r.items || []; renderRules();
 }
 
+/* 规则行上说清楚会响哪几段：单段就是名字，多段是「甲 → 乙 +2」。
+   完整清单进 title=，行上永远只有一行。 */
+function ruleItems(s) {
+  const list = Array.isArray(s.items) && s.items.length
+    ? s.items : (s.itemName ? [{ name: s.itemName }] : []);
+  if (!list.length) return '';
+  if (list.length === 1) return list[0].name;
+  return `${list[0].name} → ${list[1].name}` + (list.length > 2 ? ` +${list.length - 2}` : '');
+}
+
 function renderRules() {
   const box = $('#rules');
   if (!S.scheds.length) {
@@ -904,7 +933,7 @@ function renderRules() {
         <button class="mini" data-a="t">${s.enabled ? '停用' : '启用'}</button>
         <button class="mini" data-a="d">删除</button>
         <span class="grow"></span>
-        <span class="cap" style="align-self:center">${esc(s.itemName || '')}</span>
+        <span class="cap" style="align-self:center;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(ruleItems(s))}</span>
       </div>`;
     el.querySelector('[data-a=t]').onclick = () =>
       api(`/api/collections/ss_schedules/records/${s.id}`,
@@ -916,7 +945,7 @@ function renderRules() {
 }
 
 /* ---------- 新建规则 ---------- */
-const F = { mode: 'daily', play: 30, rep: 3, gap: 60, days: [] };
+const F = { mode: 'daily', play: 30, rep: 3, gap: 60, days: [], pick: [] };
 /* 秒数按档跳，不弹键盘也不用滑块（3e） */
 const STEPS = [5, 10, 15, 30, 60, 120, 300, 600, 1800, 3600];
 function stepVal(v, d) {
@@ -925,9 +954,44 @@ function stepVal(v, d) {
   return below.length ? below[below.length - 1] : STEPS[0];
 }
 
+/* ---------- 定时播什么 ----------
+ *
+ * 以前这是隐式的：保存时抓「当前选中的那个成品」，屏幕上没有任何一处说这条规则
+ * 会响哪一段。现在明选，而且多选按**点选顺序**连着放——所以序号是有意义的，
+ * 圆点里放的是次序而不是一个勾。
+ */
+function renderPick() {
+  const box = $('#pickList');
+  box.innerHTML = '';
+  for (const it of S.items) {
+    const at = F.pick.indexOf(it.id);
+    const b = document.createElement('button');
+    b.className = 'pick' + (at >= 0 ? ' on' : '');
+    b.innerHTML = `<span class="ord">${at >= 0 ? at + 1 : ''}</span>
+      <span class="pname">${esc(it.name)}</span>
+      <span class="plen num">${fmt(it.duration)}</span>`;
+    b.onclick = () => {
+      const i = F.pick.indexOf(it.id);
+      if (i >= 0) F.pick.splice(i, 1); else F.pick.push(it.id);
+      renderPick(); syncSheet();
+    };
+    box.appendChild(b);
+  }
+  const chosen = pickedItems();
+  const total = chosen.reduce((s, i) => s + (i.duration || 0), 0);
+  $('#pickCap').textContent = chosen.length
+    ? `播放内容 · 已选 ${chosen.length} 段 · 共 ${fmt(total)}`
+    : '播放内容 · 点一下选中，可多选（按点选顺序连着放）';
+}
+
+const pickedItems = () => F.pick.map(id => S.items.find(i => i.id === id)).filter(Boolean);
+
 function openSheet() {
   if (!S.items.length) { $('#sheetErr').textContent = ''; setTab('now'); return; }
   $('#fDate').value = cnParts(new Date()).date;
+  // 开局带上「现在」页选中的那一段，保留原来的顺手，但现在它是看得见的。
+  F.pick = S.selItem && S.items.some(i => i.id === S.selItem) ? [S.selItem] : [];
+  renderPick();
   syncSheet();
   $('#scrim').classList.remove('hide'); $('#sheet').classList.remove('hide');
   requestAnimationFrame(() => { $('#scrim').classList.add('show'); $('#sheet').classList.add('show'); });
@@ -987,20 +1051,34 @@ function syncSheet() {
                        startTime: $('#fStart').value, endTime: $('#fEnd').value, weekdays: F.days });
   const it = S.items.find(i => i.id === S.selItem) || S.items[0];
   const how = F.mode === 'window' ? '持续到结束时间' : `${F.play} 秒 × ${F.rep} 次`;
+  // 一行结论：什么时候响、放什么、放不放得完。够不够放是这里唯一值得算的事——
+  // 差额靠循环补上，用户不该自己去做这道减法。
+  const chosen = pickedItems();
+  const total = chosen.reduce((a, i) => a + (i.duration || 0), 0);
+  const names = chosen.map(i => i.name).join(' → ') || '未选内容';
+  const fit = F.mode === 'window' ? '循环到时段结束'
+            : !total ? ''
+            : F.play > total ? `共 ${fmt(total)}，不够 ${fmt(F.play)}，会循环滚动`
+            : `共 ${fmt(total)}，到 ${fmt(F.play)} 就停`;
   $('#verdict').innerHTML = f
     ? `首次将在 <b>${esc(sayWhen(f))}</b> 响 · ${esc(how)}<br>
-       <span style="font-size:12px;color:var(--t3)">${esc(it ? it.name : '')}</span>`
+       <span style="font-size:12px;color:var(--t3)">${esc(names)}${fit ? ' · ' + esc(fit) : ''}</span>`
     : '<b>不会触发</b> · 检查日期或星期';
 }
 
 $('#saveRule').onclick = async () => {
   $('#sheetErr').textContent = '';
-  const it = S.items.find(i => i.id === S.selItem) || S.items[0];
-  if (!it) { $('#sheetErr').textContent = '没有可用的成品'; return; }
+  const chosen = pickedItems();
+  if (!chosen.length) { $('#sheetErr').textContent = '先选要播放的内容'; return; }
+  const it = chosen[0];
   try {
     await api('/api/collections/ss_schedules/records', { method: 'POST',
       body: JSON.stringify({
         player: S.sel, item: it.id, itemName: it.name, localPath: it.localPath,
+        // items 是事实源；itemName / localPath 留着，老版本 Mac 只认得它们，
+        // 至少还能播到第一段而不是彻底不响。
+        items: chosen.map(i => ({ id: i.id, name: i.name,
+                                  localPath: i.localPath, duration: i.duration || 0 })),
         enabled: true, mode: F.mode, date: $('#fDate').value,
         startTime: $('#fStart').value, endTime: $('#fEnd').value,
         weekdays: [...F.days].sort((a, b) => a - b),
