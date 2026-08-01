@@ -486,6 +486,8 @@ const atLeast = (v, min) => {
   return true;
 };
 const reportsAudio = p => atLeast(p.appVersion, '0.11.0');
+// 出声次数是 0.17.0 才有的；老版本没有这个字段，会一直显示「等待出声」。
+const reportsCount = p => atLeast(p.appVersion, '0.17.0');
 // 改名/移除要 Mac 端配合改本机清单，老版本会回「不认识的指令」——那就别给按钮。
 const canManage = p => p && atLeast(p.appVersion, '0.13.0');
 
@@ -675,10 +677,35 @@ function renderNow() {
     // 「播放中」本身不证明有声音：解码失败、停滞、静音、或这段本就是空白，
     // 从外面看全都一样。所以分开说，并把实测电平画出来。
     if (!reportsAudio(p)) setBadge('播放中', 'ok');       // 这台 Mac 太旧，测不了
-    else if (p.audible) setBadge(`有声 ${meter(p.level)}`, 'ok');
-    else setBadge(p.note || '无声', 'bt');
+    else setBadge(...soundVerdict(p));
   }
   else setBadge('已暂停', '');
+}
+
+/* 「现在有没有声音」是个错问题。
+ *
+ * 散布出来的一小时本来就大半是静音，按瞬时电平判，十次有九次报「无声」——
+ * 于是这个警告什么也不说明了，真出问题的那次也淹在里面。用户原话：
+ * 「确实可能是当前播放的静音段落，但是确实不知道到底有没有播放」。
+ *
+ * 改问「**出过几次声**」。计数一直在涨，就证明整条链路是通的（解码、混音、
+ * 输出设备、音箱），哪怕此刻正好在间隔里。一次都没有过，才值得报警。
+ */
+function soundVerdict(p) {
+  const n = p.soundCount || 0;
+  const since = p.silentFor ?? -1;      // 距上次出声的秒数，-1 = 还没出过
+  const playing = p.playingFor || 0;
+  if (p.audible) return [`有声 ${meter(p.level)}`, 'ok'];
+  // 老版本不报次数，退回原来的说法，别拿一个永远是 0 的计数去吓人。
+  if (!reportsCount(p)) return [p.note || '无声', 'bt'];
+  if (n > 0) {
+    // 间隔中：这是正常状态，不是警告。次数是「它确实在响」的证据。
+    const ago = since >= 0 ? ` · ${since < 60 ? Math.round(since) + ' 秒前' : Math.round(since / 60) + ' 分前'}` : '';
+    return [`间隔中 · 已响 ${n} 次${ago}`, 'ok'];
+  }
+  // 还没出过声。刚开始播很正常——第一声之前可能就有一段静音。
+  if (playing < 120) return ['等待出声', ''];
+  return [`已播 ${Math.round(playing / 60)} 分还没出过声`, 'bad'];
 }
 
 function setBadge(text, kind, spinning) {
