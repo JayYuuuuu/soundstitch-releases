@@ -3,156 +3,285 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#0A6CFF">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
 <title>声拼 · 控制台</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon-192.png">
 <style>
-  :root{
-    --accent:#0A6CFF; --ok:#34C759; --warn:#FF9F0A; --stop:#FF3B30;
-    --bg:#F1F1F3; --card:#FFF; --line:rgba(0,0,0,.12); --line2:rgba(0,0,0,.06);
-    --t1:#1D1D1F; --t2:#3A3A3C; --t3:#7C7C80; --field:#FFF;
-  }
-  @media (prefers-color-scheme:dark){
-    :root{--bg:#17171A;--card:#202023;--line:rgba(255,255,255,.10);--line2:rgba(255,255,255,.06);
-          --t1:#F2F2F5;--t2:#E6E6EA;--t3:#8E8E93;--field:#2C2C2F;--accent:#0A84FF}
-  }
-  *{box-sizing:border-box}
-  body{margin:0;background:var(--bg);color:var(--t1);
-       font:14px/1.5 -apple-system,"SF Pro Text","PingFang SC",system-ui,sans-serif;
-       -webkit-font-smoothing:antialiased;padding-top:env(safe-area-inset-top)}
-  .mono{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:12px}
-  .wrap{max-width:720px;margin:0 auto;padding:16px 16px 40px}
-  header{display:flex;align-items:center;gap:10px;margin-bottom:14px}
-  header h1{font-size:17px;font-weight:600;margin:0;letter-spacing:-.01em}
-  .grow{flex:1}
-  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;
-        padding:14px;margin-bottom:12px}
-  .cap{font-size:11px;font-weight:600;color:var(--t3);margin-bottom:8px}
-  label{display:block;font-size:12px;color:var(--t3);margin:8px 0 4px}
-  input[type=text],input[type=password],input[type=email]{
-    width:100%;height:34px;padding:0 10px;border:1px solid var(--line);border-radius:6px;
-    background:var(--field);color:var(--t1);font-size:14px}
-  button{font:inherit;border:1px solid var(--line);background:var(--card);color:var(--t2);
-         height:34px;padding:0 14px;border-radius:7px;cursor:pointer}
-  button:hover{border-color:var(--accent)}
-  button:disabled{opacity:.4;cursor:default;border-color:var(--line)}
-  button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
-  button.round{width:44px;height:44px;padding:0;border-radius:50%;font-size:16px}
-  .row{display:flex;align-items:center;gap:10px}
-  .devices{display:flex;flex-direction:column;gap:6px}
-  .dev{display:flex;align-items:center;gap:10px;padding:10px;border-radius:8px;
-       border:1px solid transparent;cursor:pointer}
-  .dev:hover{background:var(--line2)}
-  .dev.sel{background:color-mix(in srgb,var(--accent) 12%,transparent);border-color:var(--accent)}
-  .dot{width:8px;height:8px;border-radius:50%;background:var(--t3);flex:none}
-  .dot.on{background:var(--ok)}
-  .badge{font-size:11px;padding:2px 7px;border-radius:20px;background:var(--line2);color:var(--t3)}
-  .badge.bt{background:color-mix(in srgb,var(--accent) 18%,transparent);color:var(--accent);font-weight:600}
-  .items{display:flex;flex-direction:column;gap:4px;max-height:280px;overflow:auto}
-  .item{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:7px;cursor:pointer}
-  .item:hover{background:var(--line2)}
-  .item.sel{background:color-mix(in srgb,var(--accent) 12%,transparent)}
-  .muted{color:var(--t3)}
-  .bar{width:100%;height:4px;background:var(--line);border-radius:2px;overflow:hidden;margin:10px 0 4px}
-  .bar>i{display:block;height:100%;background:var(--accent);width:0}
-  input[type=range]{width:100%;accent-color:var(--accent)}
-  select,input[type=text].sm{height:32px;border:1px solid var(--line);border-radius:6px;
-    background:var(--field);color:var(--t1);padding:0 8px;font-size:13px}
-  #schedCard input[type=text]{height:32px;padding:0 8px;font-size:13px}
-  .err{color:var(--warn);font-size:12px;margin-top:8px;white-space:pre-wrap}
-  .hide{display:none}
-  .center{text-align:center;padding:26px 0;color:var(--t3);font-size:13px}
+/* 设计稿 3f 组件规格 —— 改样式先改这里，别在结构里写死值。 */
+:root{
+  --accent:#0A6CFF; --ok:#34C759; --bt:#FF9F0A; --bad:#FF3B30; --once:#AF52DE; --off:#8E8E93;
+  --bg:#F2F2F7; --card:#FFF; --card2:#F7F7F8; --line:rgba(0,0,0,.07); --line2:rgba(0,0,0,.14);
+  --t1:#1D1D1F; --t2:#6E6E73; --t3:#8A8A8E;
+  --okText:#248A3D; --badText:#C42B21; --accText:#0A4FA3; --btText:#B4700A;
+}
+@media (prefers-color-scheme:dark){
+  :root{--accent:#0A84FF; --ok:#30D158; --bad:#FF453A;
+        --bg:#000; --card:#1C1C1E; --card2:#2C2C2E; --line:rgba(255,255,255,.10);
+        --line2:rgba(255,255,255,.16); --t1:#F2F2F7; --t2:#C7C7CC; --t3:#8E8E93;
+        --okText:#30D158; --badText:#FF453A; --accText:#0A84FF; --btText:#FF9F0A}
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--t1);
+  font:14px/1.5 -apple-system,"SF Pro Text","PingFang SC",system-ui,sans-serif;
+  -webkit-font-smoothing:antialiased;overscroll-behavior-y:none}
+.mono,.num{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-variant-numeric:tabular-nums}
+button,input{font:inherit;color:inherit}
+button{border:0;background:none;padding:0;cursor:pointer}
+.hide{display:none !important}
+.grow{flex:1}
+
+#app{display:flex;flex-direction:column;height:100dvh;max-width:480px;margin:0 auto;position:relative}
+.safe{padding-top:max(env(safe-area-inset-top),12px)}
+.bar{padding:0 16px 10px;display:flex;align-items:center;gap:8px}
+.bar h1{font-size:22px;font-weight:700;letter-spacing:-.02em;margin:0}
+
+/* 设备 chip 条常驻：换机一步，视线不动（3a） */
+.chips{display:flex;gap:8px;overflow-x:auto;padding:0 16px 12px;scrollbar-width:none}
+.chips::-webkit-scrollbar{display:none}
+.chip{flex:none;height:36px;padding:0 13px;border-radius:18px;display:flex;align-items:center;
+      gap:7px;background:var(--card);border:.5px solid var(--line2);font-size:14px;font-weight:500;
+      white-space:nowrap;transition:background .18s ease-out,color .18s ease-out}
+.chip.sel{background:var(--accent);border-color:transparent;color:#fff}
+.chip.off{color:var(--off)}
+.cdot{width:7px;height:7px;border-radius:50%;background:var(--ok);flex:none}
+.chip.off .cdot{background:#C7C7CC}
+.chip.sel .cdot{background:rgba(255,255,255,.9)}
+
+main{flex:1;overflow-y:auto;padding:0 16px 16px;-webkit-overflow-scrolling:touch}
+.card{background:var(--card);border-radius:16px;padding:14px;margin-bottom:12px}
+.cap{font-size:11px;font-weight:600;color:var(--t3)}
+
+/* 状态一律靠徽标表达，不写句子 */
+.badge{font-size:11px;font-weight:600;padding:3px 8px;border-radius:6px;background:var(--line);
+       color:var(--t2);display:inline-flex;align-items:center;gap:5px;white-space:nowrap;
+       transition:background .14s,color .14s}
+.badge.ok{background:rgba(52,199,89,.16);color:var(--okText)}
+.badge.bt{background:rgba(255,159,10,.18);color:var(--btText)}
+.badge.bad{background:rgba(255,59,48,.12);color:var(--badText)}
+.badge.acc{background:rgba(10,108,255,.14);color:var(--accText)}
+
+.now-name{font-size:17px;font-weight:600}
+.now-out{font-size:13px;color:var(--t2);margin-top:3px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.track{height:4px;border-radius:2px;background:var(--line);margin:14px 0 6px;overflow:hidden}
+.track>i{display:block;height:100%;background:var(--accent);width:0;transition:width .5s linear}
+.times{display:flex;font-size:12px;color:var(--t3)}
+.keys{display:flex;align-items:center;justify-content:center;gap:22px;margin:16px 0 6px}
+.key{width:56px;height:56px;border-radius:50%;background:var(--card2);display:flex;
+     align-items:center;justify-content:center;transition:transform 90ms cubic-bezier(.2,0,.4,1)}
+.key.main{width:72px;height:72px;background:var(--accent)}
+.key:active{transform:scale(.92)}
+.key svg{width:24px;height:24px;fill:var(--t1)}
+.key.main svg{width:30px;height:30px;fill:#fff}
+.shake{animation:shake 260ms ease-in-out}
+@keyframes shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-6px)}
+                 50%{transform:translateX(6px)}75%{transform:translateX(-6px)}}
+.spin{animation:spin 900ms linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+input[type=range]{width:100%;accent-color:var(--accent);height:44px}
+
+.row{display:flex;align-items:center;gap:12px;min-height:56px;padding:6px 0}
+.row+.row{border-top:.5px solid var(--line)}
+.rowmain{flex:1;min-width:0}
+.rowsub{font-size:13px;color:var(--t2);margin-top:2px}
+.empty{text-align:center;padding:28px 8px;color:var(--t3);font-size:13px;line-height:1.7}
+.mini{height:40px;min-width:44px;padding:0 14px;border-radius:9px;background:var(--card2);
+      font-size:14px;font-weight:500}
+.mini.acc{background:var(--accent);color:#fff}
+
+/* 定时规则：时间当主角，24 小时条把「什么时候」变成位置问题（3e） */
+.rule{background:var(--card);border-radius:16px;padding:14px;margin-bottom:12px}
+.rule.dim{opacity:.55}
+.rtime{font-size:19px;font-weight:700;letter-spacing:-.01em}
+.rbadges{display:flex;gap:6px;flex-wrap:wrap;margin-top:7px}
+.strip{position:relative;height:16px;border-radius:4px;background:var(--line);margin-top:12px;overflow:hidden}
+.strip>b{position:absolute;top:2px;bottom:2px;background:var(--accent);border-radius:2px;min-width:2px}
+.strip>b.once{background:var(--once)}
+.strip>u{position:absolute;top:0;bottom:0;width:2px;background:var(--bad)}
+.days{display:flex;gap:5px;margin-top:10px}
+.days i{width:19px;height:19px;border-radius:50%;background:var(--line);font-style:normal;
+        font-size:10px;font-weight:600;color:var(--t3);display:flex;align-items:center;justify-content:center}
+.days i.on{background:var(--accent);color:#fff}
+
+nav{flex:none;display:flex;border-top:.5px solid var(--line);background:var(--card);
+    padding-bottom:max(env(safe-area-inset-bottom),20px)}
+nav button{flex:1;height:63px;display:flex;flex-direction:column;align-items:center;
+           justify-content:center;gap:3px;color:var(--t3);font-size:10px;font-weight:600}
+nav button.sel{color:var(--accent)}
+nav svg{width:22px;height:22px;fill:currentColor}
+
+.scrim{position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:10;opacity:0;transition:opacity .32s}
+.scrim.show{opacity:1}
+.sheet{position:fixed;left:0;right:0;bottom:0;z-index:11;background:var(--bg);
+       border-radius:26px 26px 0 0;padding:8px 16px max(env(safe-area-inset-bottom),20px);
+       max-width:480px;margin:0 auto;max-height:90dvh;overflow-y:auto;
+       transform:translateY(100%);transition:transform .32s cubic-bezier(.32,.72,0,1)}
+.sheet.show{transform:translateY(0)}
+.grab{width:36px;height:5px;border-radius:3px;background:var(--line2);margin:0 auto 12px}
+.sheet h2{font-size:17px;font-weight:600;margin:0 0 14px}
+.seg{display:flex;background:var(--card2);border-radius:9px;padding:3px;margin-bottom:12px}
+.seg button{flex:1;height:36px;border-radius:7px;font-size:13px;font-weight:500;color:var(--t2)}
+.seg button.sel{background:var(--card);color:var(--t1);font-weight:600;box-shadow:0 1px 3px rgba(0,0,0,.12)}
+.fcard{background:var(--card);border-radius:12px;padding:0 14px;margin-bottom:12px}
+.frow{display:flex;align-items:center;min-height:60px;gap:12px}
+.frow+.frow{border-top:.5px solid var(--line)}
+.flabel{font-size:15px;font-weight:500;flex:1}
+.timeblock{position:relative;width:88px;height:76px;border-radius:12px;background:var(--card2);
+           display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px}
+.timeblock b{font-size:24px;font-weight:700;letter-spacing:-.02em}
+.timeblock s{font-size:10px;color:var(--t3);text-decoration:none}
+.timeblock input{position:absolute;inset:0;opacity:0;width:100%;height:100%}
+.stepper{display:flex;align-items:center;gap:2px}
+.stepper button{width:44px;height:44px;border-radius:9px;background:var(--card2);
+                font-size:20px;font-weight:400}
+.stepper span{min-width:64px;text-align:center;font-size:17px;font-weight:600}
+.daypick{display:flex;gap:2px;padding:8px 0 12px}
+.daypick button{width:44px;height:44px;display:flex;align-items:center;justify-content:center}
+.daypick i{width:32px;height:32px;border-radius:50%;background:var(--card2);font-style:normal;
+           font-size:13px;font-weight:600;color:var(--t2);display:flex;align-items:center;justify-content:center}
+.daypick button.on i{background:var(--accent);color:#fff}
+.verdict{font-size:14px;color:var(--t2);text-align:center;padding:2px 0 14px;line-height:1.6}
+.verdict b{color:var(--t1);font-weight:600}
+.primary{width:100%;height:52px;border-radius:12px;background:var(--accent);color:#fff;
+         font-size:17px;font-weight:600;transition:transform 90ms cubic-bezier(.2,0,.4,1)}
+.primary:active{transform:scale(.98)}
+.ghost{width:100%;height:44px;border-radius:12px;color:var(--t2);font-size:15px;margin-top:6px}
+.err{color:var(--bad);font-size:13px;padding:4px 0;text-align:center}
+
+#login{padding:0 16px}
+#login h2{font-size:26px;font-weight:700;letter-spacing:-.02em;margin:8px 0 20px}
+.field{background:var(--card);border-radius:12px;padding:0 14px 10px;margin-bottom:10px}
+.field label{display:block;font-size:11px;font-weight:600;color:var(--t3);padding-top:10px}
+.field input{width:100%;border:0;background:none;outline:none;height:32px;font-size:16px}
+
+@media (prefers-reduced-motion:reduce){*{animation:none !important;transition:opacity .12s !important}}
 </style>
 </head>
 <body>
-<div class="wrap">
+<div id="app">
+  <div class="safe"></div>
 
-<header>
-  <h1>声拼 · 控制台</h1>
-  <span class="grow"></span>
-  <span id="link" class="badge">未连接</span>
-  <button id="out" class="hide" style="height:28px;padding:0 10px">退出</button>
-</header>
+  <main id="login">
+    <h2>声拼 · 控制台</h2>
+    <div class="field"><label>服务器</label><input id="url" type="text" spellcheck="false" autocapitalize="off"></div>
+    <div class="field"><label>账号</label><input id="email" type="email" autocomplete="username" autocapitalize="off"></div>
+    <div class="field"><label>密码</label><input id="pass" type="password" autocomplete="current-password"></div>
+    <div id="loginErr" class="err"></div>
+    <button id="doLogin" class="primary" style="margin-top:10px">登录</button>
+    <div class="empty">同一账号登录的所有 Mac 都会出现在这里</div>
+  </main>
 
-<!-- 登录 -->
-<div id="loginCard" class="card">
-  <div class="cap">连接控制端</div>
-  <label>服务器</label><input id="url" type="text" spellcheck="false">
-  <label>账号</label><input id="email" type="email" autocomplete="username">
-  <label>密码</label><input id="pass" type="password" autocomplete="current-password">
-  <div class="row" style="margin-top:12px">
-    <button id="login" class="primary">登录</button>
-    <span class="muted mono">同一账号登录的所有 Mac 都会出现在这里</span>
-  </div>
-  <div id="loginErr" class="err"></div>
-</div>
-
-<!-- 设备 -->
-<div id="devCard" class="card hide">
-  <div class="cap">设备</div>
-  <div id="devices" class="devices"></div>
-</div>
-
-<!-- 播放器 -->
-<div id="playCard" class="card hide">
-  <div class="cap">播放</div>
-  <div id="nowName" style="font-weight:600">未选择</div>
-  <div id="nowOut" class="mono muted" style="margin-top:2px"></div>
-  <div class="bar"><i id="prog"></i></div>
-  <div class="row mono muted"><span id="tCur">0:00</span><span class="grow"></span><span id="tAll">0:00</span></div>
-  <div class="row" style="justify-content:center;gap:14px;margin:12px 0 6px">
-    <button id="bStop" class="round" title="停止">■</button>
-    <button id="bPlay" class="round primary" title="播放 / 暂停">▶</button>
-    <button id="bBack" class="round" title="后退 15 秒">↺</button>
-  </div>
-  <label>音量</label>
-  <input id="vol" type="range" min="0" max="100" value="100">
-  <div id="playErr" class="err"></div>
-</div>
-
-<!-- 定时 -->
-<div id="schedCard" class="card hide">
-  <div class="cap">定时播放（东八区）</div>
-  <div id="scheds" class="items" style="max-height:200px"></div>
-  <div style="border-top:1px solid var(--line2);margin-top:10px;padding-top:10px">
-    <div class="row" style="flex-wrap:wrap;gap:8px">
-      <select id="sMode" style="height:32px"><option value="daily">每天</option><option value="window">时段内持续</option><option value="once">指定日期一次</option></select>
-      <input id="sStart" type="text" value="22:00" style="width:74px" placeholder="起 HH:MM">
-      <input id="sEnd" type="text" value="23:00" style="width:74px;display:none" placeholder="止 HH:MM">
-      <input id="sDate" type="text" style="width:110px;display:none" placeholder="yyyy-MM-dd">
-      <input id="sPlay" type="text" value="30" style="width:66px" placeholder="每次秒">
-      <input id="sRepeat" type="text" value="1" style="width:52px" placeholder="次数">
-      <input id="sGap" type="text" value="60" style="width:66px" placeholder="间隔秒">
-      <button id="sAdd" class="primary">添加</button>
+  <div id="shell" class="hide" style="display:flex;flex-direction:column;flex:1;min-height:0">
+    <div class="bar">
+      <h1 id="title">现在</h1>
+      <span class="grow"></span>
+      <span id="link" class="badge">连接中</span>
+      <button id="out" class="badge">退出</button>
     </div>
-    <div class="muted mono" style="margin-top:6px">对当前选中的成品生效；定时由 Mac 判定，手机关掉也照常播</div>
-    <div id="schedErr" class="err"></div>
+    <div id="chips" class="chips"></div>
+
+    <main id="tabNow">
+      <div class="card">
+        <div style="display:flex;align-items:flex-start;gap:10px">
+          <div style="flex:1;min-width:0">
+            <div id="nowName" class="now-name">未选择</div>
+            <div id="nowOut" class="now-out"></div>
+          </div>
+          <span id="cmdBadge" class="badge">已暂停</span>
+        </div>
+        <div class="track"><i id="prog"></i></div>
+        <div class="times"><span id="tCur" class="num">0:00</span><span class="grow"></span><span id="tAll" class="num">0:00</span></div>
+        <div id="keys" class="keys">
+          <button id="bBack" class="key" aria-label="后退 15 秒">
+            <svg viewBox="0 0 24 24"><path d="M12 5V2L7 6.5 12 11V8a5.5 5.5 0 11-5.5 5.5H4A8 8 0 1012 5z"/></svg></button>
+          <button id="bPlay" class="key main" aria-label="播放或暂停">
+            <svg id="playIcon" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></button>
+          <button id="bStop" class="key" aria-label="停止">
+            <svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2.5"/></svg></button>
+        </div>
+        <input id="vol" type="range" min="0" max="100" value="100" aria-label="音量">
+      </div>
+
+      <div class="card">
+        <div class="cap" style="margin-bottom:4px">成品</div>
+        <div id="items"></div>
+      </div>
+    </main>
+
+    <main id="tabSched" class="hide">
+      <div id="rules"></div>
+      <button id="addRule" class="primary">新建定时</button>
+    </main>
+
+    <nav>
+      <button id="navNow" class="sel"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>现在</button>
+      <button id="navSched"><svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 100 20 10 10 0 000-20zm1 10.6V6h-2v7.4l5.5 3.3 1-1.7-4.5-2.4z"/></svg>定时</button>
+    </nav>
   </div>
 </div>
 
-<!-- 曲目 -->
-<div id="itemCard" class="card hide">
-  <div class="cap">这台机器上的成品</div>
-  <div id="items" class="items"></div>
+<div id="scrim" class="scrim hide"></div>
+<div id="sheet" class="sheet hide">
+  <div class="grab"></div>
+  <h2>新建定时</h2>
+  <div class="seg" id="mSeg">
+    <button data-m="daily" class="sel">每天</button>
+    <button data-m="once">指定日期</button>
+    <button data-m="window">时段内</button>
+  </div>
+
+  <div class="fcard">
+    <div class="frow" id="rowDate"><span class="flabel">日期</span>
+      <input id="fDate" type="date" style="font-size:16px;background:none;border:0;text-align:right"></div>
+    <div class="frow"><span class="flabel" id="labStart">时间</span>
+      <label class="timeblock"><b id="shStart">22:00</b><s>点按修改</s>
+        <input id="fStart" type="time" value="22:00"></label></div>
+    <div class="frow" id="rowEnd"><span class="flabel">结束</span>
+      <label class="timeblock"><b id="shEnd">23:00</b><s>点按修改</s>
+        <input id="fEnd" type="time" value="23:00"></label></div>
+  </div>
+
+  <div class="fcard" id="grpTake">
+    <div class="frow"><span class="flabel">每次时长</span>
+      <div class="stepper"><button data-s="play" data-d="-1">−</button><span id="vPlay" class="num">30 s</span><button data-s="play" data-d="1">＋</button></div></div>
+    <div class="frow"><span class="flabel">重复次数</span>
+      <div class="stepper"><button data-s="rep" data-d="-1">−</button><span id="vRep" class="num">3 次</span><button data-s="rep" data-d="1">＋</button></div></div>
+    <div class="frow"><span class="flabel">间隔</span>
+      <div class="stepper"><button data-s="gap" data-d="-1">−</button><span id="vGap" class="num">60 s</span><button data-s="gap" data-d="1">＋</button></div></div>
+  </div>
+
+  <div class="fcard" id="grpDays" style="padding:8px 12px">
+    <div class="cap">只在这些天（不选＝每天）</div>
+    <div class="daypick" id="dayPick"></div>
+  </div>
+
+  <div class="verdict" id="verdict"></div>
+  <div id="sheetErr" class="err"></div>
+  <button id="saveRule" class="primary">保存</button>
+  <button id="cancelRule" class="ghost">取消</button>
 </div>
 
-</div>
 <script>
-/* 声拼控制台
+/* 声拼控制台 —— 按设计稿 3a–3g 实现。
  *
- * 单文件、零依赖、零构建 —— 和 Mac 端一样的原则。
- *
- * 它只写记录，不搬音频：播放发生在 Mac 上，那里才有音频文件和蓝牙音箱。
- * 遥控一小时的音频不该等于搬运一小时的音频。
+ * 遥控器，不是播放器：音频和蓝牙音箱都在 Mac 那边，这里只写记录。
+ * 单文件、零依赖、零构建，和 Mac 端同一原则。
  */
 const $ = s => document.querySelector(s);
 const S = {
   url: localStorage.ssUrl || 'https://baihe.yujiev.com:54812',
   token: localStorage.ssToken || '',
-  players: [], items: [], scheds: [], sel: null, selItem: null, es: null, clientId: null,
+  players: [], items: [], scheds: [], sel: null, selItem: null,
+  tab: 'now', es: null, retries: 0, cmd: 'idle', failMsg: '',
+  cmdTimer: null, failTimer: null,
 };
+const DAYS = ['日', '一', '二', '三', '四', '五', '六'];   // 下标 = weekday-1
 
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c =>
+  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const fmt = s => {
   s = Math.max(0, Math.floor(s || 0));
   const h = (s / 3600) | 0, m = ((s % 3600) / 60) | 0, x = s % 60;
@@ -161,57 +290,88 @@ const fmt = s => {
 };
 
 async function api(path, opts = {}) {
-  const r = await fetch(S.url + path, {
-    ...opts,
-    headers: { 'Content-Type': 'application/json',
-               ...(S.token ? { Authorization: S.token } : {}), ...(opts.headers || {}) },
-  });
+  const r = await fetch(S.url + path, { ...opts, headers: {
+    'Content-Type': 'application/json',
+    ...(S.token ? { Authorization: S.token } : {}), ...(opts.headers || {}) } });
   const body = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(body.message || `HTTP ${r.status}`);
   return body;
 }
 
+/* ---------- 东八区 ----------
+ * 规则写的是墙上钟点，判定必须在 Asia/Shanghai 做，不能跟随看页面的设备：
+ * 人在国外打开控制台，「每天 22:00」不该变成当地的 22:00。 */
+const CN = 'Asia/Shanghai';
+const cnParts = d => {
+  const p = new Intl.DateTimeFormat('en-CA', { timeZone: CN, hour12: false,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', weekday: 'short' }).formatToParts(d);
+  const g = t => p.find(x => x.type === t)?.value;
+  const wd = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(g('weekday')) + 1;
+  return { date: `${g('year')}-${g('month')}-${g('day')}`,
+           minutes: (+g('hour') % 24) * 60 + +g('minute'), weekday: wd };
+};
+const hhmm = t => { const p = String(t || '').split(':'); return p.length === 2 ? +p[0] * 60 + +p[1] : null; };
+
+/* 「下一次什么时候响」—— 用户唯一真正要的答案，所以它是每条规则的主结论 */
+function nextFire(s, now = new Date()) {
+  const start = hhmm(s.startTime);
+  if (start == null || !s.enabled) return null;
+  const nowP = cnParts(now);
+
+  // 一次性规则直接按日期算，不能靠逐日扫描：排在两周后的规则会扫不到，
+  // 于是被判成「不会再响」——一条完全正常的规则。
+  if (s.mode === 'once') {
+    if (!s.date) return null;
+    const days = Math.round((Date.parse(s.date + 'T00:00:00Z') -
+                             Date.parse(nowP.date + 'T00:00:00Z')) / 86400000);
+    if (days < 0 || (days === 0 && nowP.minutes >= start)) return { expired: true };
+    return { at: start, days, live: false };
+  }
+
+  for (let d = 0; d < 8; d++) {
+    const p = cnParts(new Date(now.getTime() + d * 86400000));
+    if (s.weekdays && s.weekdays.length && !s.weekdays.includes(p.weekday)) continue;
+    if (d === 0 && nowP.minutes >= start) {
+      if (s.mode === 'window') {
+        const end = hhmm(s.endTime);
+        if (end != null && (end > start ? nowP.minutes < end : true)) return { at: start, days: 0, live: true };
+      }
+      continue;
+    }
+    return { at: start, days: d, live: false };
+  }
+  return null;
+}
+const clock = m => `${String((m / 60) | 0).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+const sayWhen = f => !f ? '不会再响' : f.expired ? '已完成' : f.live ? '正在响'
+  : f.days === 0 ? `今天 ${clock(f.at)}` : f.days === 1 ? `明天 ${clock(f.at)}`
+  : `${f.days} 天后 ${clock(f.at)}`;
+
 /* ---------- 登录 ---------- */
 $('#url').value = S.url;
 $('#email').value = localStorage.ssEmail || '';
-
-$('#login').onclick = async () => {
+$('#doLogin').onclick = async () => {
   $('#loginErr').textContent = '';
   S.url = $('#url').value.replace(/\/+$/, '');
   try {
-    const r = await api('/api/collections/ss_users/auth-with-password', {
-      method: 'POST',
-      body: JSON.stringify({ identity: $('#email').value, password: $('#pass').value }),
-    });
+    const r = await api('/api/collections/ss_users/auth-with-password', { method: 'POST',
+      body: JSON.stringify({ identity: $('#email').value, password: $('#pass').value }) });
     S.token = r.token;
-    localStorage.ssUrl = S.url;
-    localStorage.ssToken = S.token;
+    localStorage.ssUrl = S.url; localStorage.ssToken = S.token;
     localStorage.ssEmail = $('#email').value;
     start();
-  } catch (e) {
-    $('#loginErr').textContent = String(e.message || e);
-  }
+  } catch (e) { $('#loginErr').textContent = String(e.message || e); }
 };
-
-$('#out').onclick = () => {
-  localStorage.removeItem('ssToken');
-  location.reload();
-};
+$('#out').onclick = () => { localStorage.removeItem('ssToken'); location.reload(); };
 
 /* ---------- 启动 ---------- */
 async function start() {
-  $('#loginCard').classList.add('hide');
-  $('#devCard').classList.remove('hide');
-  $('#out').classList.remove('hide');
-  try {
-    await loadPlayers();
-    connectRealtime();
-  } catch (e) {
-    // An expired token looks exactly like a wrong password unless it's said.
-    if (String(e.message).includes('401') || String(e.message).includes('403')) {
-      localStorage.removeItem('ssToken');
-      location.reload();
-    }
+  $('#login').classList.add('hide');
+  $('#shell').classList.remove('hide');
+  try { await loadPlayers(); connectRealtime(); }
+  catch (e) {
+    if (/40[13]/.test(String(e.message))) { localStorage.removeItem('ssToken'); location.reload(); }
     $('#loginErr').textContent = String(e.message || e);
   }
 }
@@ -219,121 +379,144 @@ async function start() {
 async function loadPlayers() {
   const r = await api('/api/collections/ss_players/records?perPage=50&sort=-updated');
   S.players = r.items || [];
-  if (!S.sel && S.players.length) selectPlayer(S.players[0].id);
-  renderPlayers();
+  if (!S.sel && S.players.length) S.sel = S.players[0].id;
+  renderChips(); renderNow();
+  if (S.sel) { await loadItems(); await loadScheds(); }
 }
 
-/* A machine that vanished without saying goodbye still has online=true, so
- * freshness of the heartbeat is what actually decides "online". */
-const isLive = p => p.online && (Date.now() - new Date(p.lastSeen || 0).getTime() < 60000);
+/* 心跳新鲜度才是「在线」的依据：掉线的机器不会有人来改 online 字段 */
+const isLive = p => !!p && p.online && (Date.now() - new Date(p.lastSeen || 0).getTime() < 60000);
+const current = () => S.players.find(p => p.id === S.sel);
+const shortName = n => (String(n || 'Mac').replace(/^虞杰的\s*/, '').split(/\s+/)[0] || 'Mac');
 
-function renderPlayers() {
-  const box = $('#devices');
-  if (!S.players.length) {
-    box.innerHTML = '<div class="center">还没有 Mac 连上来。<br>在 Mac 版声拼里用同一个账号登录即可。</div>';
-    return;
-  }
+function renderChips() {
+  const box = $('#chips');
   box.innerHTML = '';
   for (const p of S.players) {
-    const out = p.outputDevice || {};
-    const el = document.createElement('div');
-    el.className = 'dev' + (p.id === S.sel ? ' sel' : '');
-    el.innerHTML =
-      `<span class="dot ${isLive(p) ? 'on' : ''}" title="${isLive(p) ? '心跳正常' : '心跳已超过 60 秒未更新'}"></span>
-       <span style="flex:1;min-width:0">
-         <div style="font-weight:600">${esc(p.name || '未命名 Mac')}</div>
-         <div class="mono muted">${out.name ? esc(out.name) : '未知输出'}${
-              out.sampleRate ? ' · ' + Math.round(out.sampleRate / 1000) + ' kHz' : ''}</div>
-       </span>
-       ${out.bluetooth ? '<span class="badge bt">蓝牙</span>'
-                       : `<span class="badge">${esc(out.transport || '')}</span>`}`;
-    el.onclick = () => selectPlayer(p.id);
-    box.appendChild(el);
+    const b = document.createElement('button');
+    b.className = 'chip' + (p.id === S.sel ? ' sel' : '') + (isLive(p) ? '' : ' off');
+    b.innerHTML = `<span class="cdot"></span>${esc(shortName(p.name))}`;
+    b.onclick = async () => {
+      S.sel = p.id; S.selItem = null; S.cmd = 'idle';
+      renderChips(); renderNow(); await loadItems(); await loadScheds();
+    };
+    box.appendChild(b);
   }
 }
 
-function esc(s) {
-  return String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+/* ---------- 现在 ---------- */
+function renderNow() {
+  const p = current();
+  if (!p) {
+    $('#nowName').textContent = '没有找到 Mac';
+    $('#nowOut').innerHTML = '<span class="cap">在 Mac 版声拼里用同一账号登录</span>';
+    setBadge('', ''); return;
+  }
+  const out = p.outputDevice || {};
+  $('#nowName').textContent = p.currentName || '未选择';
+  $('#nowOut').innerHTML = out.name
+    ? `${esc(out.name)}<span class="badge ${out.bluetooth ? 'bt' : ''}">${esc(out.transport || '')}</span>`
+      + (out.sampleRate ? `<span class="num" style="font-size:12px">${Math.round(out.sampleRate / 1000)} kHz</span>` : '')
+    : '';
+
+  const d = p.duration || 0, c = p.position || 0;
+  $('#prog').style.width = d ? (c / d * 100) + '%' : '0';
+  $('#tCur').textContent = fmt(c);
+  $('#tAll').textContent = fmt(d);
+  $('#playIcon').innerHTML = p.state === 'playing'
+    ? '<path d="M6.5 5h4v14h-4zM13.5 5h4v14h-4z"/>' : '<path d="M8 5v14l11-7z"/>';
+  const vol = p.currentItem ? (p.volume ?? 1) : (p.volume || 1);
+  $('#vol').value = Math.round(vol * 100);
+
+  // 设备离线优先于任何指令状态：原因要指向真问题，而不是报一个假的指令失败（3g）
+  if (!isLive(p)) {
+    const mins = Math.round((Date.now() - new Date(p.lastSeen || 0).getTime()) / 60000);
+    setBadge(isFinite(mins) && mins < 10000 ? `离线 · 心跳 ${mins} 分前` : '离线', '');
+  }
+  else if (S.cmd === 'pending') setBadge('下发中', 'acc', true);
+  else if (S.cmd === 'slow') setBadge('未回应', 'bt', true);
+  else if (S.cmd === 'fail') setBadge(S.failMsg || '失败 · 重试', 'bad');
+  else setBadge(p.state === 'playing' ? '播放中' : '已暂停', p.state === 'playing' ? 'ok' : '');
 }
 
-async function selectPlayer(id) {
-  S.sel = id; S.selItem = null;
-  renderPlayers(); renderNow();
-  $('#playCard').classList.remove('hide');
-  $('#schedCard').classList.remove('hide');
-  $('#itemCard').classList.remove('hide');
-  loadScheds();
-  const r = await api(`/api/collections/ss_items/records?perPage=200&sort=-created&filter=` +
-                      encodeURIComponent(`player='${id}'`));
-  S.items = r.items || [];
-  renderItems();
+function setBadge(text, kind, spinning) {
+  const el = $('#cmdBadge');
+  el.className = 'badge' + (kind ? ' ' + kind : '');
+  el.innerHTML = (spinning
+    ? '<svg class="spin" viewBox="0 0 24 24" width="10" height="10"><path fill="currentColor" d="M12 2a10 10 0 019.5 6.9l-1.9.6A8 8 0 1012 20v2A10 10 0 1112 2z"/></svg>'
+    : '') + esc(text);
+  el.style.display = text ? '' : 'none';
+}
+
+async function loadItems() {
+  const r = await api('/api/collections/ss_items/records?perPage=200&sort=-created&filter=' +
+                      encodeURIComponent(`player='${S.sel}'`));
+  S.items = r.items || []; renderItems();
 }
 
 function renderItems() {
   const box = $('#items');
   if (!S.items.length) {
-    box.innerHTML = '<div class="center">这台机器还没有导出过成品。<br>在 Mac 上导出一次就会出现在这里。</div>';
-    return;
+    box.innerHTML = '<div class="empty">这台机器还没有成品<br>在 Mac 上导出一次就会出现</div>'; return;
   }
   box.innerHTML = '';
   for (const it of S.items) {
     const el = document.createElement('div');
-    el.className = 'item' + (it.id === S.selItem ? ' sel' : '');
-    el.innerHTML = `<span style="flex:1;min-width:0"><div>${esc(it.name)}</div>
-      <div class="mono muted">${fmt(it.duration)} · ${(it.fileSize / 1048576).toFixed(1)} MB</div></span>
-      <button style="height:28px;padding:0 12px">播放</button>`;
-    el.querySelector('button').onclick = ev => { ev.stopPropagation(); play(it); };
+    el.className = 'row';
+    const on = it.id === S.selItem;
+    el.innerHTML = `<span class="rowmain">
+        <div style="font-weight:500;color:${on ? 'var(--accent)' : 'inherit'}">${esc(it.name)}</div>
+        <div class="rowsub num">${fmt(it.duration)} · ${(it.fileSize / 1048576).toFixed(1)} MB</div></span>
+      <button class="mini acc">播放</button>`;
+    el.querySelector('button').onclick = e => { e.stopPropagation(); play(it); };
     el.onclick = () => { S.selItem = it.id; renderItems(); };
     box.appendChild(el);
   }
 }
 
-function setLink(text, ok) {
-  $('#link').textContent = text;
-  $('#link').className = 'badge' + (ok ? ' bt' : '');
-}
-
-function current() { return S.players.find(p => p.id === S.sel); }
-
-function renderNow() {
-  const p = current();
-  if (!p) return;
-  const out = p.outputDevice || {};
-  $('#nowName').textContent = p.currentName || '未选择';
-  // `transport` already reads 蓝牙 for a Bluetooth device; appending the flag
-  // as well printed 「蓝牙 · 蓝牙」.
-  $('#nowOut').textContent = out.name
-    ? `${out.name}${out.transport ? '（' + out.transport + '）' : ''}` : '';
-  const d = p.duration || 0, c = p.position || 0;
-  $('#prog').style.width = d ? (c / d * 100) + '%' : '0';
-  $('#tCur').textContent = fmt(c);
-  $('#tAll').textContent = fmt(d);
-  $('#bPlay').textContent = p.state === 'playing' ? '❚❚' : '▶';
-  // A player that has never loaded anything reports volume 0 simply because
-  // the field defaulted; showing a dead slider for that is a lie.
-  const vol = p.currentItem ? (p.volume ?? 1) : (p.volume || 1);
-  $('#vol').value = Math.round(vol * 100);
-  // Deliberately not touched here: this badge is the console's own link to the
-  // server. Whether a *device* is alive is the dot in its row — one badge
-  // meaning two things is how it ended up claiming 在线 next to a grey dot.
-}
-
-/* ---------- 指令 ---------- */
+/* ---------- 异步指令三态（3g） ---------- */
 async function cmd(action, payload = {}) {
-  if (!S.sel) return;
-  $('#playErr').textContent = '';
+  if (!current()) return;
+  clearTimeout(S.cmdTimer); clearTimeout(S.failTimer);
+  S.cmd = 'idle';
+  // 转圈只在 90 ms 后出现：多数指令 200 ms 内回报，立刻转圈反而更像卡顿。
+  S.cmdTimer = setTimeout(() => { S.cmd = 'pending'; renderNow(); }, 90);
   try {
-    await api('/api/collections/ss_commands/records', {
-      method: 'POST',
-      body: JSON.stringify({ player: S.sel, action, payload, status: 'pending' }),
-    });
-  } catch (e) {
-    $('#playErr').textContent = String(e.message || e);
-  }
+    const rec = await api('/api/collections/ss_commands/records', { method: 'POST',
+      body: JSON.stringify({ player: S.sel, action, payload, status: 'pending' }) });
+    watch(rec.id);
+  } catch (e) { fail(String(e.message || e)); }
+}
+
+function watch(id) {
+  const began = Date.now();
+  const tick = async () => {
+    let rec;
+    try { rec = await api('/api/collections/ss_commands/records/' + id); }
+    catch { return; }
+    if (rec.status === 'done') { clearTimeout(S.cmdTimer); S.cmd = 'idle'; renderNow(); return; }
+    if (rec.status === 'failed') return fail(rec.result || '执行失败');
+    const age = Date.now() - began;
+    // 心跳同时失鲜就不报指令失败——原因要指向真问题。
+    if (!isLive(current())) { clearTimeout(S.cmdTimer); S.cmd = 'idle'; renderNow(); return; }
+    if (age > 8000) return fail('设备未回应');
+    if (age > 3000) { clearTimeout(S.cmdTimer); S.cmd = 'slow'; renderNow(); }
+    setTimeout(tick, 400);
+  };
+  setTimeout(tick, 250);
+}
+
+function fail(msg) {
+  clearTimeout(S.cmdTimer);
+  S.cmd = 'fail'; S.failMsg = msg; renderNow();
+  const keys = $('#keys');
+  keys.classList.remove('shake'); void keys.offsetWidth; keys.classList.add('shake');
+  // 失败要看得见，但不该赖着不走。
+  S.failTimer = setTimeout(() => { S.cmd = 'idle'; renderNow(); }, 3000);
 }
 
 const play = it => { S.selItem = it.id; renderItems();
-                     cmd('play', { localPath: it.localPath, name: it.name, itemId: it.id }); };
+  cmd('play', { localPath: it.localPath, name: it.name, itemId: it.id }); };
 $('#bPlay').onclick = () => {
   const p = current();
   if (p && p.state === 'playing') return cmd('pause');
@@ -342,124 +525,222 @@ $('#bPlay').onclick = () => {
   if (it) play(it);
 };
 $('#bStop').onclick = () => cmd('stop');
-$('#bBack').onclick = () => {
-  const p = current();
-  cmd('seek', { position: Math.max(0, (p?.position || 0) - 15) });
-};
+$('#bBack').onclick = () => cmd('seek', { position: Math.max(0, (current()?.position || 0) - 15) });
 $('#vol').onchange = e => cmd('volume', { volume: e.target.value / 100 });
 
-/* ---------- 定时 ---------- */
-const MODE = { daily: '每天', window: '时段', once: '一次' };
+/* ---------- Tab ---------- */
+const setTab = t => {
+  S.tab = t;
+  $('#tabNow').classList.toggle('hide', t !== 'now');
+  $('#tabSched').classList.toggle('hide', t !== 'sched');
+  $('#navNow').classList.toggle('sel', t === 'now');
+  $('#navSched').classList.toggle('sel', t === 'sched');
+  $('#title').textContent = t === 'now' ? '现在' : '定时';
+};
+$('#navNow').onclick = () => setTab('now');
+$('#navSched').onclick = () => setTab('sched');
 
+/* ---------- 定时 ---------- */
 async function loadScheds() {
   const r = await api('/api/collections/ss_schedules/records?perPage=200&sort=startTime&filter=' +
                       encodeURIComponent(`player='${S.sel}'`));
-  S.scheds = r.items || [];
-  renderScheds();
+  S.scheds = r.items || []; renderRules();
 }
 
-function renderScheds() {
-  const box = $('#scheds');
-  if (!S.scheds || !S.scheds.length) {
-    box.innerHTML = '<div class="center">还没有定时规则</div>';
+function renderRules() {
+  const box = $('#rules');
+  if (!S.scheds.length) {
+    box.innerHTML = '<div class="card"><div class="empty">还没有定时规则<br>新建一条，Mac 到点会自己响</div></div>';
     return;
   }
+  const nowMin = cnParts(new Date()).minutes;
+  const pct = m => (m / 14.4);            // 一天 1440 分钟 → 百分比
   box.innerHTML = '';
   for (const s of S.scheds) {
-    const when = s.mode === 'window' ? `${s.startTime}–${s.endTime}`
-               : s.mode === 'once' ? `${s.date} ${s.startTime}` : `每天 ${s.startTime}`;
-    const how = s.mode === 'window' ? '持续'
-              : `${s.playSeconds || 0}s × ${s.repeatCount || 1}${s.gapSeconds ? ' 间隔' + s.gapSeconds + 's' : ''}`;
+    const f = nextFire(s);
+    const start = hhmm(s.startTime) ?? 0;
+    const head = s.mode === 'window' ? `${s.startTime} → ${s.endTime}`
+               : s.mode === 'once' ? `${(s.date || '').slice(5)} ${s.startTime}` : s.startTime;
+    const kind = s.mode === 'once' ? ' class="once"' : '';
+
+    // 24 小时缩略条：把「什么时候响」变成位置问题；跨午夜自动切两段
+    let blocks = '';
+    if (s.mode === 'window') {
+      const end = hhmm(s.endTime) ?? start;
+      blocks = end > start
+        ? `<b${kind} style="left:${pct(start)}%;width:${pct(end - start)}%"></b>`
+        : `<b${kind} style="left:${pct(start)}%;right:0"></b><b${kind} style="left:0;width:${pct(end)}%"></b>`;
+    } else {
+      const takes = Math.max(1, s.repeatCount || 1);
+      const cycleMin = ((s.playSeconds || 0) + (s.gapSeconds || 0)) / 60;
+      const wide = Math.max(0.5, pct((s.playSeconds || 60) / 60));
+      for (let i = 0; i < takes && i < 60; i++)
+        blocks += `<b${kind} style="left:${pct(start + i * cycleMin)}%;width:${wide}%"></b>`;
+    }
+
+    const badges = s.mode === 'window'
+      ? '<span class="badge">持续</span>'
+      : `<span class="badge">${s.playSeconds || 0} s</span><span class="badge">× ${s.repeatCount || 1}</span>`
+        + (s.gapSeconds ? `<span class="badge">间隔 ${s.gapSeconds} s</span>` : '');
+
+    const days = s.mode === 'once' ? ''
+      : `<div class="days">${DAYS.map((d, i) =>
+          `<i class="${!s.weekdays || !s.weekdays.length || s.weekdays.includes(i + 1) ? 'on' : ''}">${d}</i>`
+        ).join('')}</div>`;
+
     const el = document.createElement('div');
-    el.className = 'item';
-    el.innerHTML = `<span style="flex:1;min-width:0">
-        <div>${esc(s.itemName || '(未指定)')}</div>
-        <div class="mono muted">${esc(when)} · ${esc(how)}</div></span>
-      <span class="badge${s.enabled ? ' bt' : ''}">${s.enabled ? '启用' : '停用'}</span>
-      <button style="height:28px;padding:0 10px">删</button>`;
-    el.querySelector('.badge').onclick = () => toggleSched(s);
-    el.querySelector('button').onclick = () => delSched(s);
+    el.className = 'rule' + (s.enabled && !(f && f.expired) ? '' : ' dim');
+    el.innerHTML = `
+      <div style="display:flex;align-items:flex-start;gap:10px">
+        <div style="flex:1;min-width:0">
+          <div class="rtime num">${esc(head)}</div>
+          <div class="rbadges">${badges}</div>
+        </div>
+        <span class="badge ${f && f.live ? 'ok' : ''}">${esc(s.enabled ? sayWhen(f) : '已停用')}</span>
+      </div>
+      <div class="strip">${blocks}<u style="left:${pct(nowMin)}%"></u></div>
+      ${days}
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <button class="mini" data-a="t">${s.enabled ? '停用' : '启用'}</button>
+        <button class="mini" data-a="d">删除</button>
+        <span class="grow"></span>
+        <span class="cap" style="align-self:center">${esc(s.itemName || '')}</span>
+      </div>`;
+    el.querySelector('[data-a=t]').onclick = () =>
+      api(`/api/collections/ss_schedules/records/${s.id}`,
+          { method: 'PATCH', body: JSON.stringify({ enabled: !s.enabled }) }).then(loadScheds);
+    el.querySelector('[data-a=d]').onclick = () =>
+      api(`/api/collections/ss_schedules/records/${s.id}`, { method: 'DELETE' }).then(loadScheds);
     box.appendChild(el);
   }
 }
 
-$('#sMode').onchange = e => {
-  $('#sEnd').style.display = e.target.value === 'window' ? '' : 'none';
-  $('#sDate').style.display = e.target.value === 'once' ? '' : 'none';
-  const per = e.target.value === 'window';
-  for (const id of ['#sPlay', '#sRepeat', '#sGap']) $(id).style.display = per ? 'none' : '';
+/* ---------- 新建规则 ---------- */
+const F = { mode: 'daily', play: 30, rep: 3, gap: 60, days: [] };
+/* 秒数按档跳，不弹键盘也不用滑块（3e） */
+const STEPS = [5, 10, 15, 30, 60, 120, 300, 600, 1800, 3600];
+function stepVal(v, d) {
+  if (d > 0) return STEPS.find(x => x > v) ?? STEPS[STEPS.length - 1];
+  const below = STEPS.filter(x => x < v);
+  return below.length ? below[below.length - 1] : STEPS[0];
+}
+
+function openSheet() {
+  if (!S.items.length) { $('#sheetErr').textContent = ''; setTab('now'); return; }
+  $('#fDate').value = cnParts(new Date()).date;
+  syncSheet();
+  $('#scrim').classList.remove('hide'); $('#sheet').classList.remove('hide');
+  requestAnimationFrame(() => { $('#scrim').classList.add('show'); $('#sheet').classList.add('show'); });
+}
+function closeSheet() {
+  $('#scrim').classList.remove('show'); $('#sheet').classList.remove('show');
+  setTimeout(() => { $('#scrim').classList.add('hide'); $('#sheet').classList.add('hide'); }, 320);
+}
+$('#addRule').onclick = openSheet;
+$('#cancelRule').onclick = closeSheet;
+$('#scrim').onclick = closeSheet;
+
+$('#mSeg').onclick = e => {
+  const b = e.target.closest('button'); if (!b) return;
+  F.mode = b.dataset.m;
+  [...$('#mSeg').children].forEach(x => x.classList.toggle('sel', x === b));
+  syncSheet();
+};
+$('#fStart').oninput = e => { $('#shStart').textContent = e.target.value; syncSheet(); };
+$('#fEnd').oninput = e => { $('#shEnd').textContent = e.target.value; syncSheet(); };
+$('#fDate').oninput = syncSheet;
+
+document.querySelectorAll('.stepper button').forEach(b => b.onclick = () => {
+  const k = b.dataset.s, d = +b.dataset.d;
+  if (k === 'rep') F.rep = Math.max(1, Math.min(99, F.rep + d));
+  else F[k] = stepVal(F[k], d);
+  syncSheet();
+});
+
+$('#dayPick').innerHTML = DAYS.map((d, i) => `<button data-d="${i + 1}"><i>${d}</i></button>`).join('');
+$('#dayPick').onclick = e => {
+  const b = e.target.closest('button'); if (!b) return;
+  const d = +b.dataset.d;
+  F.days = F.days.includes(d) ? F.days.filter(x => x !== d) : [...F.days, d];
+  syncSheet();
 };
 
-$('#sAdd').onclick = async () => {
-  $('#schedErr').textContent = '';
+/* 不适用的字段整组消失，而不是灰着占位（3e） */
+function syncSheet() {
+  $('#rowDate').classList.toggle('hide', F.mode !== 'once');
+  $('#rowEnd').classList.toggle('hide', F.mode !== 'window');
+  $('#grpTake').classList.toggle('hide', F.mode === 'window');
+  $('#grpDays').classList.toggle('hide', F.mode === 'once');
+  $('#labStart').textContent = F.mode === 'window' ? '开始' : '时间';
+  $('#vPlay').textContent = F.play + ' s';
+  $('#vRep').textContent = F.rep + ' 次';
+  $('#vGap').textContent = F.gap + ' s';
+  [...$('#dayPick').children].forEach(b => b.classList.toggle('on', F.days.includes(+b.dataset.d)));
+
+  // 底部实时结论：保存前就能确认，代替所有说明文字
+  const f = nextFire({ enabled: true, mode: F.mode, date: $('#fDate').value,
+                       startTime: $('#fStart').value, endTime: $('#fEnd').value, weekdays: F.days });
   const it = S.items.find(i => i.id === S.selItem) || S.items[0];
-  if (!it) { $('#schedErr').textContent = '先在下面选一个成品'; return; }
+  const how = F.mode === 'window' ? '持续到结束时间' : `${F.play} 秒 × ${F.rep} 次`;
+  $('#verdict').innerHTML = f
+    ? `首次将在 <b>${esc(sayWhen(f))}</b> 响 · ${esc(how)}<br>
+       <span style="font-size:12px;color:var(--t3)">${esc(it ? it.name : '')}</span>`
+    : '<b>不会触发</b> · 检查日期或星期';
+}
+
+$('#saveRule').onclick = async () => {
+  $('#sheetErr').textContent = '';
+  const it = S.items.find(i => i.id === S.selItem) || S.items[0];
+  if (!it) { $('#sheetErr').textContent = '没有可用的成品'; return; }
   try {
-    await api('/api/collections/ss_schedules/records', {
-      method: 'POST',
+    await api('/api/collections/ss_schedules/records', { method: 'POST',
       body: JSON.stringify({
         player: S.sel, item: it.id, itemName: it.name, localPath: it.localPath,
-        enabled: true, mode: $('#sMode').value,
-        date: $('#sDate').value, startTime: $('#sStart').value, endTime: $('#sEnd').value,
-        weekdays: [],
-        playSeconds: Number($('#sPlay').value) || 0,
-        repeatCount: Number($('#sRepeat').value) || 1,
-        gapSeconds: Number($('#sGap').value) || 0,
-      }),
-    });
-    loadScheds();
-  } catch (e) { $('#schedErr').textContent = String(e.message || e); }
+        enabled: true, mode: F.mode, date: $('#fDate').value,
+        startTime: $('#fStart').value, endTime: $('#fEnd').value,
+        weekdays: [...F.days].sort((a, b) => a - b),
+        playSeconds: F.play, repeatCount: F.rep, gapSeconds: F.gap }) });
+    closeSheet(); loadScheds();
+  } catch (e) { $('#sheetErr').textContent = String(e.message || e); }
 };
 
-const toggleSched = s => api(`/api/collections/ss_schedules/records/${s.id}`,
-  { method: 'PATCH', body: JSON.stringify({ enabled: !s.enabled }) }).then(loadScheds);
-const delSched = s => api(`/api/collections/ss_schedules/records/${s.id}`,
-  { method: 'DELETE' }).then(loadScheds);
-
 /* ---------- 实时 ---------- */
-/* EventSource can't send an Authorization header, and it doesn't need to:
- * PocketBase authenticates the *subscription* POST and binds it to the clientId
- * the stream handed out. Same reason this page works cross-origin. */
+/* EventSource 不能自定义请求头，也不需要：PocketBase 的 SSE 连接本身匿名，
+ * 认证靠随后那个带 Authorization 的订阅 POST 绑定 clientId。这也是它能跨域的原因。 */
 function connectRealtime() {
   if (S.es) S.es.close();
   const es = new EventSource(S.url + '/api/realtime');
   S.es = es;
   es.addEventListener('PB_CONNECT', async ev => {
-    S.clientId = JSON.parse(ev.data).clientId;
-    await api('/api/realtime', {
-      method: 'POST',
-      body: JSON.stringify({ clientId: S.clientId, subscriptions: ['ss_players', 'ss_items', 'ss_schedules'] }),
-    });
-    setLink('已连接', true);
+    S.retries = 0;
+    await api('/api/realtime', { method: 'POST', body: JSON.stringify({
+      clientId: JSON.parse(ev.data).clientId,
+      subscriptions: ['ss_players', 'ss_items', 'ss_schedules'] }) });
+    setLink('已连接', 'ok');
   });
   es.addEventListener('ss_players', ev => {
     const { action, record } = JSON.parse(ev.data);
     const i = S.players.findIndex(p => p.id === record.id);
     if (action === 'delete') { if (i >= 0) S.players.splice(i, 1); }
-    else if (i >= 0) S.players[i] = record;
-    else S.players.push(record);
+    else if (i >= 0) S.players[i] = record; else S.players.push(record);
     if (!S.sel) S.sel = record.id;
-    renderPlayers(); renderNow();
+    renderChips(); renderNow();
   });
+  es.addEventListener('ss_items', () => { if (S.sel) loadItems(); });
   es.addEventListener('ss_schedules', () => { if (S.sel) loadScheds(); });
-  es.addEventListener('ss_items', ev => {
-    const { action, record } = JSON.parse(ev.data);
-    if (record.player !== S.sel) return;
-    const i = S.items.findIndex(x => x.id === record.id);
-    if (action === 'delete') { if (i >= 0) S.items.splice(i, 1); }
-    else if (i >= 0) S.items[i] = record;
-    else S.items.unshift(record);
-    renderItems();
-  });
-  // The browser reconnects an EventSource on its own, but a token that expired
-  // while the tab slept needs the subscription re-bound, which only happens on
-  // a fresh PB_CONNECT — so let it reconnect rather than papering over errors.
-  es.onerror = () => setLink('重连中…', false);
+  es.onerror = () => setLink(`重连中 · 第 ${++S.retries} 次`, 'bt');
+}
+function setLink(text, kind) {
+  $('#link').className = 'badge' + (kind ? ' ' + kind : '');
+  $('#link').textContent = text;
 }
 
-/* Heartbeats are 15 s apart; refresh liveness in between so a Mac that dropped
- * off doesn't keep showing a green dot. */
-setInterval(renderNow, 5000);
+/* 心跳 15 秒一次；中间自己刷新，免得掉线的机器一直亮着绿点，
+ * 也让规则上的「下一次」和当前时刻线跟着走。 */
+setInterval(() => {
+  renderNow(); renderChips();
+  if (S.tab === 'sched') renderRules();
+}, 5000);
 
 if (S.token) start();
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
