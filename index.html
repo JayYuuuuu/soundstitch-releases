@@ -57,6 +57,8 @@ button{border:0;background:none;padding:0;cursor:pointer}
 .chip.sel{background:var(--accent);border-color:transparent;color:#fff}
 .chip.off{color:var(--off)}
 .cdot{width:7px;height:7px;border-radius:50%;background:var(--ok);flex:none}
+/* 命中区补到 30px：铅笔本身只有十来像素，够看不够点 */
+.cpen{margin:-8px -6px -8px 2px;padding:8px 6px;font-size:13px;opacity:.75;line-height:1}
 .chip.off .cdot{background:#C7C7CC}
 .chip.sel .cdot{background:rgba(255,255,255,.9)}
 
@@ -357,6 +359,17 @@ nav svg{width:22px;height:22px;fill:currentColor}
   <button id="iCancel" class="ghost">取消</button>
 </div>
 
+<div id="devSheet" class="sheet hide">
+  <div class="grab"></div>
+  <h2>设备名称</h2>
+  <div id="dMachine" class="sheetname"></div>
+  <input id="dName" class="tinput" type="text" enterkeyhint="done" maxlength="60" aria-label="设备名称">
+  <div id="devErr" class="err"></div>
+  <button id="dSave" class="primary">保存</button>
+  <button id="dReset" class="ghost">用回机器名</button>
+  <button id="dCancel" class="ghost">取消</button>
+</div>
+
 <script>
 /* 声拼控制台 —— 按设计稿 3a–3g 实现。
  *
@@ -371,7 +384,7 @@ const S = {
   tab: 'now', es: null, retries: 0, cmd: 'idle', failMsg: '',
   cmdTimer: null, failTimer: null,
   manageItem: null, armTimer: null,
-  pos: null, volHeld: false,
+  pos: null, volHeld: false, devTarget: null,
 };
 const DAYS = ['日', '一', '二', '三', '四', '五', '六'];   // 下标 = weekday-1
 
@@ -502,7 +515,10 @@ async function loadPlayers() {
 /* 心跳新鲜度才是「在线」的依据：掉线的机器不会有人来改 online 字段 */
 const isLive = p => !!p && p.online && (Date.now() - new Date(p.lastSeen || 0).getTime() < 60000);
 const current = () => S.players.find(p => p.id === S.sel);
+// 机器名是 macOS 报上来的，通常又长又带「XXX 的」；截短只是为了塞进胶囊。
 const shortName = n => (String(n || 'Mac').replace(/^虞杰的\s*/, '').split(/\s+/)[0] || 'Mac');
+// 用户自己起的名字原样显示——截断是给机器名做的补救，不该用在人写的字上。
+const deviceName = p => (p && p.label) ? p.label : shortName(p && p.name);
 
 function renderChips() {
   const box = $('#chips');
@@ -510,8 +526,12 @@ function renderChips() {
   for (const p of S.players) {
     const b = document.createElement('button');
     b.className = 'chip' + (p.id === S.sel ? ' sel' : '') + (isLive(p) ? '' : ' off');
-    b.innerHTML = `<span class="cdot"></span>${esc(shortName(p.name))}`;
-    b.onclick = async () => {
+    // 改名的入口只长在选中的那一枚上：每一枚都挂个铅笔会把设备切换这件事
+    // 淹掉，而改名总是先选中再改。
+    b.innerHTML = `<span class="cdot"></span>${esc(deviceName(p))}`
+      + (p.id === S.sel ? '<span class="cpen" role="button" aria-label="改名">✎</span>' : '');
+    b.onclick = async e => {
+      if (e.target.classList.contains('cpen')) { openDevSheet(p); return; }
       S.sel = p.id; S.selItem = null; S.cmd = 'idle';
       notePos(current());
       renderChips(); renderNow(); await loadItems(); await loadScheds();
@@ -519,6 +539,49 @@ function renderChips() {
     box.appendChild(b);
   }
 }
+
+/* ---------- 设备改名 ----------
+ *
+ * 写的是 `label`，不是 `name`：`name` 是 Mac 每次心跳都覆盖的机器名
+ * （`Host.current().localizedName`），改它十几秒后就被盖回去。多一个字段，
+ * Mac 永远不碰，控制端说了算。
+ *
+ * 也因此这件事**不用经过 Mac**：显示名只存在服务端，没有第二份要同步的副本
+ * ——和成品改名正相反（那边 library.json 只有 Mac 自己能改）。好处是睡着的、
+ * 关机的机器照样能改名。
+ */
+function openDevSheet(p) {
+  S.devTarget = p.id;
+  $('#dName').value = p.label || '';
+  $('#dMachine').textContent = p.name || '';
+  $('#devErr').textContent = '';
+  $('#scrim').classList.remove('hide'); $('#devSheet').classList.remove('hide');
+  requestAnimationFrame(() => {
+    $('#scrim').classList.add('show'); $('#devSheet').classList.add('show');
+  });
+}
+
+function closeDevSheet() {
+  S.devTarget = null;
+  $('#scrim').classList.remove('show'); $('#devSheet').classList.remove('show');
+  setTimeout(() => { $('#scrim').classList.add('hide'); $('#devSheet').classList.add('hide'); }, 320);
+}
+
+async function setLabel(label) {
+  const id = S.devTarget;
+  if (!id) return;
+  try {
+    const rec = await api('/api/collections/ss_players/records/' + id,
+                          { method: 'PATCH', body: JSON.stringify({ label }) });
+    const i = S.players.findIndex(x => x.id === id);
+    if (i >= 0) S.players[i] = rec;
+    closeDevSheet(); renderChips(); renderNow();
+  } catch (e) { $('#devErr').textContent = String(e.message || e); }
+}
+
+$('#dSave').onclick = () => setLabel($('#dName').value.trim());
+$('#dReset').onclick = () => setLabel('');
+$('#dCancel').onclick = closeDevSheet;
 
 /* ---------- 进度：本地推进，服务端纠正 ----------
  *
@@ -872,6 +935,7 @@ $('#cancelRule').onclick = closeSheet;
 // 遮罩关的是「当前开着的那一层」，不是固定某一个。
 $('#scrim').onclick = () => {
   if (!$('#itemSheet').classList.contains('hide')) return closeItemSheet();
+  if (!$('#devSheet').classList.contains('hide')) return closeDevSheet();
   closeSheet();
 };
 
