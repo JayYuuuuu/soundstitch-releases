@@ -1100,6 +1100,13 @@ function connectRealtime() {
       clientId: JSON.parse(ev.data).clientId,
       subscriptions: ['ss_players', 'ss_items', 'ss_schedules'] }) });
     setLink('已连接', 'ok');
+    // 🔴 重连之后必须重新拉一遍。
+    //
+    // 订阅只保证「从现在起」的事件；断开期间发生的一切没有补发。以前这里只重新
+    // 订阅、不重新读，于是断线时新增的成品在页面上**永远**不会出现——用户在 Mac 上
+    // 加了一个文件，控制端就是不显示，除非切一次设备或整页刷新。
+    // 手机上这是常态而不是意外：PWA 一进后台连接就断。
+    refreshAll();
   });
   es.addEventListener('ss_players', ev => {
     const { action, record } = JSON.parse(ev.data);
@@ -1118,6 +1125,18 @@ function setLink(text, kind) {
   $('#link').className = 'badge' + (kind ? ' ' + kind : '');
   $('#link').textContent = text;
 }
+
+/* 断线期间的变化没有补发，所以除了重连，还有两个补读的时机：
+ *   回到前台 —— 手机上 PWA 一进后台连接就断，回来时未必立刻重连
+ *   慢轮询   —— SSE 可以「看起来还连着」却已经不送数据了（iOS 上常见），
+ *               只靠事件的话没有任何东西会发现这件事
+ * 都走同一个 refreshAll，重复调用无害。 */
+function refreshAll() {
+  if (!S.token) return;
+  loadPlayers().catch(() => {});
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshAll(); });
+setInterval(refreshAll, 45000);
 
 /* 1 秒一拍，因为播放中的进度是本地推进的（见 shownPosition）。
  * 其余的每 5 拍再刷：掉线的机器不该一直亮着绿点，规则上的「下一次」和
