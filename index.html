@@ -216,7 +216,7 @@ function renderPlayers() {
     const el = document.createElement('div');
     el.className = 'dev' + (p.id === S.sel ? ' sel' : '');
     el.innerHTML =
-      `<span class="dot ${isLive(p) ? 'on' : ''}"></span>
+      `<span class="dot ${isLive(p) ? 'on' : ''}" title="${isLive(p) ? '心跳正常' : '心跳已超过 60 秒未更新'}"></span>
        <span style="flex:1;min-width:0">
          <div style="font-weight:600">${esc(p.name || '未命名 Mac')}</div>
          <div class="mono muted">${out.name ? esc(out.name) : '未知输出'}${
@@ -263,6 +263,11 @@ function renderItems() {
   }
 }
 
+function setLink(text, ok) {
+  $('#link').textContent = text;
+  $('#link').className = 'badge' + (ok ? ' bt' : '');
+}
+
 function current() { return S.players.find(p => p.id === S.sel); }
 
 function renderNow() {
@@ -270,16 +275,22 @@ function renderNow() {
   if (!p) return;
   const out = p.outputDevice || {};
   $('#nowName').textContent = p.currentName || '未选择';
+  // `transport` already reads 蓝牙 for a Bluetooth device; appending the flag
+  // as well printed 「蓝牙 · 蓝牙」.
   $('#nowOut').textContent = out.name
-    ? `${out.name}（${out.transport || ''}${out.bluetooth ? ' · 蓝牙' : ''}）` : '';
+    ? `${out.name}${out.transport ? '（' + out.transport + '）' : ''}` : '';
   const d = p.duration || 0, c = p.position || 0;
   $('#prog').style.width = d ? (c / d * 100) + '%' : '0';
   $('#tCur').textContent = fmt(c);
   $('#tAll').textContent = fmt(d);
   $('#bPlay').textContent = p.state === 'playing' ? '❚❚' : '▶';
-  $('#vol').value = Math.round((p.volume ?? 1) * 100);
-  $('#link').textContent = isLive(p) ? '在线' : '离线';
-  $('#link').className = 'badge' + (isLive(p) ? ' bt' : '');
+  // A player that has never loaded anything reports volume 0 simply because
+  // the field defaulted; showing a dead slider for that is a lie.
+  const vol = p.currentItem ? (p.volume ?? 1) : (p.volume || 1);
+  $('#vol').value = Math.round(vol * 100);
+  // Deliberately not touched here: this badge is the console's own link to the
+  // server. Whether a *device* is alive is the dot in its row — one badge
+  // meaning two things is how it ended up claiming 在线 next to a grey dot.
 }
 
 /* ---------- 指令 ---------- */
@@ -326,7 +337,7 @@ function connectRealtime() {
       method: 'POST',
       body: JSON.stringify({ clientId: S.clientId, subscriptions: ['ss_players', 'ss_items'] }),
     });
-    $('#link').textContent = '在线';
+    setLink('已连接', true);
   });
   es.addEventListener('ss_players', ev => {
     const { action, record } = JSON.parse(ev.data);
@@ -349,7 +360,7 @@ function connectRealtime() {
   // The browser reconnects an EventSource on its own, but a token that expired
   // while the tab slept needs the subscription re-bound, which only happens on
   // a fresh PB_CONNECT — so let it reconnect rather than papering over errors.
-  es.onerror = () => { $('#link').textContent = '重连中…'; };
+  es.onerror = () => setLink('重连中…', false);
 }
 
 /* Heartbeats are 15 s apart; refresh liveness in between so a Mac that dropped
