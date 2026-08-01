@@ -76,7 +76,8 @@ main{flex:1;overflow-y:auto;padding:0 16px 16px;-webkit-overflow-scrolling:touch
 .now-name{font-size:17px;font-weight:600}
 .now-out{font-size:13px;color:var(--t2);margin-top:3px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .track{height:4px;border-radius:2px;background:var(--line);margin:14px 0 6px;overflow:hidden}
-.track>i{display:block;height:100%;background:var(--accent);width:0;transition:width .5s linear}
+/* 过渡时长和 1 秒的重绘节拍对齐，进度条才是连续走的而不是一秒一跳 */
+.track>i{display:block;height:100%;background:var(--accent);width:0;transition:width 1s linear}
 .times{display:flex;font-size:12px;color:var(--t3)}
 .keys{display:flex;align-items:center;justify-content:center;gap:22px;margin:16px 0 6px}
 .key{width:56px;height:56px;border-radius:50%;background:var(--card2);display:flex;
@@ -370,6 +371,7 @@ const S = {
   tab: 'now', es: null, retries: 0, cmd: 'idle', failMsg: '',
   cmdTimer: null, failTimer: null,
   manageItem: null, armTimer: null,
+  pos: null, volHeld: false,
 };
 const DAYS = ['日', '一', '二', '三', '四', '五', '六'];   // 下标 = weekday-1
 
@@ -492,6 +494,7 @@ async function loadPlayers() {
   const r = await api('/api/collections/ss_players/records?perPage=50&sort=-updated');
   S.players = r.items || [];
   if (!S.sel && S.players.length) S.sel = S.players[0].id;
+  notePos(current());
   renderChips(); renderNow();
   if (S.sel) { await loadItems(); await loadScheds(); }
 }
@@ -510,10 +513,39 @@ function renderChips() {
     b.innerHTML = `<span class="cdot"></span>${esc(shortName(p.name))}`;
     b.onclick = async () => {
       S.sel = p.id; S.selItem = null; S.cmd = 'idle';
+      notePos(current());
       renderChips(); renderNow(); await loadItems(); await loadScheds();
     };
     box.appendChild(b);
   }
+}
+
+/* ---------- 进度：本地推进，服务端纠正 ----------
+ *
+ * Mac 每隔几秒才推一次状态，中间控制端如果只画那个数字，进度条就是不动的
+ * ——按下暂停会立刻触发一次上报，所以看起来「只有暂停时才知道播到哪」。
+ *
+ * 所以播放中按本地时钟往前走，每次收到新记录再对齐。判断「收到新记录」用的是
+ * PocketBase 的 `updated` 而不是 position：轮询会反复拿到同一条旧记录，按 position
+ * 比较会在「播放停滞」时永远重新计时，反而把停滞画成正常播放。
+ */
+function notePos(p) {
+  if (!p) return;
+  const prev = S.pos;
+  if (!prev || prev.id !== p.id || prev.updated !== p.updated) {
+    S.pos = { id: p.id, updated: p.updated, raw: p.position || 0, at: Date.now() };
+  }
+}
+
+function shownPosition(p, d) {
+  const raw = p.position || 0;
+  // 只在确实在播、而且这台机器还在报心跳的时候往前走。掉线的机器继续走进度
+  // 等于拿一个编出来的数字盖住「它已经不在了」。
+  if (p.state !== 'playing' || !isLive(p)) return raw;
+  const base = S.pos && S.pos.id === p.id ? S.pos : null;
+  if (!base) return raw;
+  const c = base.raw + (Date.now() - base.at) / 1000;
+  return d ? Math.min(c, d) : c;
 }
 
 /* ---------- 现在 ---------- */
@@ -531,14 +563,17 @@ function renderNow() {
       + (out.sampleRate ? `<span class="num" style="font-size:12px">${Math.round(out.sampleRate / 1000)} kHz</span>` : '')
     : '';
 
-  const d = p.duration || 0, c = p.position || 0;
+  const d = p.duration || 0, c = shownPosition(p, d);
   $('#prog').style.width = d ? (c / d * 100) + '%' : '0';
   $('#tCur').textContent = fmt(c);
   $('#tAll').textContent = fmt(d);
   $('#playIcon').innerHTML = p.state === 'playing'
     ? '<path d="M6.5 5h4v14h-4zM13.5 5h4v14h-4z"/>' : '<path d="M8 5v14l11-7z"/>';
-  const vol = p.currentItem ? (p.volume ?? 1) : (p.volume || 1);
-  $('#vol').value = Math.round(vol * 100);
+  // 手指还按在音量条上时别去写它的值——写 .value 会把滑块从手指底下拽走。
+  if (!S.volHeld) {
+    const vol = p.currentItem ? (p.volume ?? 1) : (p.volume || 1);
+    $('#vol').value = Math.round(vol * 100);
+  }
 
   // 设备离线优先于任何指令状态：原因要指向真问题，而不是报一个假的指令失败（3g）
   if (!isLive(p)) {
@@ -706,8 +741,18 @@ $('#bPlay').onclick = () => {
   if (it) play(it);
 };
 $('#bStop').onclick = () => cmd('stop');
-$('#bBack').onclick = () => cmd('seek', { position: Math.max(0, (current()?.position || 0) - 15) });
-$('#vol').onchange = e => cmd('volume', { volume: e.target.value / 100 });
+// 从屏幕上显示的位置往回退，不是从最后一次上报的位置——否则播放中按一下
+// 「后退 15 秒」实际退的是 15 加上这条记录已经放了多久。
+$('#bBack').onclick = () => {
+  const p = current();
+  if (!p) return;
+  cmd('seek', { position: Math.max(0, shownPosition(p, p.duration || 0) - 15) });
+};
+$('#vol').onchange = e => { S.volHeld = false; cmd('volume', { volume: e.target.value / 100 }); };
+// 每秒重绘会把音量滑块的值写回去，正在拖的时候那就是把滑块从手指底下拽走。
+for (const ev of ['pointerdown', 'touchstart']) $('#vol').addEventListener(ev, () => S.volHeld = true);
+for (const ev of ['pointerup', 'pointercancel', 'touchend', 'touchcancel'])
+  $('#vol').addEventListener(ev, () => setTimeout(() => S.volHeld = false, 400));
 
 /* ---------- Tab ---------- */
 const setTab = t => {
@@ -914,6 +959,7 @@ function connectRealtime() {
     if (action === 'delete') { if (i >= 0) S.players.splice(i, 1); }
     else if (i >= 0) S.players[i] = record; else S.players.push(record);
     if (!S.sel) S.sel = record.id;
+    notePos(current());
     renderChips(); renderNow();
   });
   es.addEventListener('ss_items', () => { if (S.sel) loadItems(); });
@@ -925,12 +971,17 @@ function setLink(text, kind) {
   $('#link').textContent = text;
 }
 
-/* 心跳 15 秒一次；中间自己刷新，免得掉线的机器一直亮着绿点，
- * 也让规则上的「下一次」和当前时刻线跟着走。 */
+/* 1 秒一拍，因为播放中的进度是本地推进的（见 shownPosition）。
+ * 其余的每 5 拍再刷：掉线的机器不该一直亮着绿点，规则上的「下一次」和
+ * 当前时刻线也要跟着走，但这些一秒一次是白费。 */
+let uiTick = 0;
 setInterval(() => {
-  renderNow(); renderChips();
-  if (S.tab === 'sched') renderRules();
-}, 5000);
+  renderNow();
+  if (++uiTick % 5 === 0) {
+    renderChips();
+    if (S.tab === 'sched') renderRules();
+  }
+}, 1000);
 
 /* ---------- 不缩放 ---------- */
 /* iOS 的捏合缩放是 WebKit 私有的 gesture 事件，viewport 的 user-scalable=no
