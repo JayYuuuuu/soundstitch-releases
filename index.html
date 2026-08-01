@@ -157,6 +157,65 @@ nav svg{width:22px;height:22px;fill:currentColor}
 .field label{display:block;font-size:11px;font-weight:600;color:var(--t3);padding-top:10px}
 .field input{width:100%;border:0;background:none;outline:none;height:32px;font-size:16px}
 
+.chiprow{display:flex;align-items:center;gap:10px}
+.chiprow .chips{flex:1;min-width:0}
+.segtop{display:none;margin:0 16px 12px 0;width:150px;flex:none}
+
+/* 桌面 / 程序坞独立窗口。
+ *
+ * 判据是 pointer:fine 而不是宽度：程序坞窗口默认只有 480 宽，按宽度判会
+ * 判成手机，于是一个鼠标操作的窗口里摆着 72px 的触屏按钮和底部 Tab 条 ——
+ * 那正是「看起来像被放大的手机 App」的由来。有鼠标就换密度。
+ */
+@media (pointer:fine){
+  body{font-size:13px}
+  #app{max-width:none}
+  .bar,.chiprow,main,nav>*{max-width:560px;margin-left:auto;margin-right:auto;width:100%}
+  .safe{padding-top:10px}
+  .bar{padding-bottom:8px}
+  .bar h1{font-size:17px}
+  nav{display:none}                    /* Tab 上移成分段控件 */
+  .segtop{display:flex}
+  .chips{padding-bottom:0}
+  .chiprow{padding:0 16px 12px}
+  .chip{height:30px;padding:0 11px;font-size:13px;border-radius:15px}
+  main{padding-bottom:20px}
+  .card{border-radius:12px;padding:12px 14px;margin-bottom:10px}
+  .now-name{font-size:15px}
+  .now-out{font-size:12px}
+  .keys{gap:16px;margin:14px 0 4px}
+  .key{width:44px;height:44px}
+  .key.main{width:56px;height:56px}
+  .key svg{width:19px;height:19px}
+  .key.main svg{width:23px;height:23px}
+  .key:hover{filter:brightness(.94)}
+  input[type=range]{height:28px}
+  .row{min-height:42px;padding:4px 0}
+  .rowsub{font-size:12px}
+  .mini{height:30px;padding:0 12px;font-size:13px;min-width:0}
+  .mini:hover{filter:brightness(.94)}
+  .rule{border-radius:12px;padding:12px 14px;margin-bottom:10px}
+  .rtime{font-size:17px}
+  .strip{height:13px}
+  .sheet{max-width:520px;border-radius:14px;bottom:auto;top:50%;left:50%;right:auto;
+         transform:translate(-50%,-46%) scale(.98);opacity:0;
+         transition:transform .2s ease-out,opacity .2s ease-out;
+         width:min(520px,calc(100vw - 40px));max-height:84vh;
+         box-shadow:0 24px 60px rgba(0,0,0,.28);padding:16px 18px 18px}
+  .sheet.show{transform:translate(-50%,-50%) scale(1);opacity:1}
+  .grab{display:none}
+  .frow{min-height:48px}
+  .timeblock{width:78px;height:60px}
+  .timeblock b{font-size:20px}
+  .stepper button{width:36px;height:36px;font-size:17px}
+  .daypick button{width:36px;height:36px}
+  .daypick i{width:28px;height:28px;font-size:12px}
+  .primary{height:40px;font-size:15px;border-radius:9px}
+  .ghost{height:34px;font-size:14px}
+  #login{max-width:400px;margin:0 auto}
+  #login h2{font-size:20px}
+}
+
 @media (prefers-reduced-motion:reduce){*{animation:none !important;transition:opacity .12s !important}}
 </style>
 </head>
@@ -181,7 +240,12 @@ nav svg{width:22px;height:22px;fill:currentColor}
       <span id="link" class="badge">连接中</span>
       <button id="out" class="badge">退出</button>
     </div>
-    <div id="chips" class="chips"></div>
+    <div class="chiprow">
+      <div id="chips" class="chips"></div>
+      <div id="segTabs" class="seg segtop">
+        <button data-t="now" class="sel">现在</button><button data-t="sched">定时</button>
+      </div>
+    </div>
 
     <main id="tabNow">
       <div class="card">
@@ -535,10 +599,15 @@ const setTab = t => {
   $('#tabSched').classList.toggle('hide', t !== 'sched');
   $('#navNow').classList.toggle('sel', t === 'now');
   $('#navSched').classList.toggle('sel', t === 'sched');
+  [...$('#segTabs').children].forEach(b => b.classList.toggle('sel', b.dataset.t === t));
   $('#title').textContent = t === 'now' ? '现在' : '定时';
 };
 $('#navNow').onclick = () => setTab('now');
 $('#navSched').onclick = () => setTab('sched');
+$('#segTabs').onclick = e => {
+  const b = e.target.closest('button');
+  if (b) setTab(b.dataset.t);
+};
 
 /* ---------- 定时 ---------- */
 async function loadScheds() {
