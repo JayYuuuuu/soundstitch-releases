@@ -100,6 +100,14 @@ input[type=range]{width:100%;accent-color:var(--accent);height:44px}
 .mini{height:40px;min-width:44px;padding:0 14px;border-radius:9px;background:var(--card2);
       font-size:14px;font-weight:500}
 .mini.acc{background:var(--accent);color:#fff}
+.mini.more{padding:0 10px;min-width:38px;color:var(--t2);font-size:17px;line-height:1}
+.mini.danger{background:none;color:var(--bad);width:100%;height:48px;font-size:15px}
+/* 二次确认不另开一层弹窗：按钮自己变成「确认移除」，一行说清代价 */
+.mini.danger.armed{background:var(--bad);color:#fff}
+.sheetname{font-size:13px;color:var(--t2);margin:-8px 0 12px;overflow:hidden;
+           text-overflow:ellipsis;white-space:nowrap}
+.tinput{width:100%;height:48px;border-radius:12px;background:var(--card2);border:0;
+        padding:0 14px;font-size:16px;color:var(--t1);margin-bottom:10px}
 
 /* 定时规则：时间当主角，24 小时条把「什么时候」变成位置问题（3e） */
 .rule{background:var(--card);border-radius:16px;padding:14px;margin-bottom:12px}
@@ -337,6 +345,17 @@ nav svg{width:22px;height:22px;fill:currentColor}
   <button id="cancelRule" class="ghost">取消</button>
 </div>
 
+<div id="itemSheet" class="sheet hide">
+  <div class="grab"></div>
+  <h2>管理成品</h2>
+  <div id="iPath" class="sheetname"></div>
+  <input id="iName" class="tinput" type="text" enterkeyhint="done" aria-label="名称">
+  <div id="itemErr" class="err"></div>
+  <button id="iSave" class="primary">改名</button>
+  <button id="iDel" class="mini danger">从控制端移除</button>
+  <button id="iCancel" class="ghost">取消</button>
+</div>
+
 <script>
 /* 声拼控制台 —— 按设计稿 3a–3g 实现。
  *
@@ -350,6 +369,7 @@ const S = {
   players: [], items: [], scheds: [], sel: null, selItem: null,
   tab: 'now', es: null, retries: 0, cmd: 'idle', failMsg: '',
   cmdTimer: null, failTimer: null,
+  manageItem: null, armTimer: null,
 };
 const DAYS = ['日', '一', '二', '三', '四', '五', '六'];   // 下标 = weekday-1
 
@@ -426,6 +446,8 @@ const atLeast = (v, min) => {
   return true;
 };
 const reportsAudio = p => atLeast(p.appVersion, '0.11.0');
+// 改名/移除要 Mac 端配合改本机清单，老版本会回「不认识的指令」——那就别给按钮。
+const canManage = p => p && atLeast(p.appVersion, '0.13.0');
 
 /* 五格电平条：数字读不出「大概多响」，格子可以 */
 const meter = lv => {
@@ -557,6 +579,7 @@ function renderItems() {
     box.innerHTML = '<div class="empty">这台机器还没有成品<br>在 Mac 上导出一次就会出现</div>'; return;
   }
   box.innerHTML = '';
+  const manage = canManage(current());
   for (const it of S.items) {
     const el = document.createElement('div');
     el.className = 'row';
@@ -564,12 +587,73 @@ function renderItems() {
     el.innerHTML = `<span class="rowmain">
         <div style="font-weight:500;color:${on ? 'var(--accent)' : 'inherit'}">${esc(it.name)}</div>
         <div class="rowsub num">${fmt(it.duration)} · ${(it.fileSize / 1048576).toFixed(1)} MB</div></span>
+      ${manage ? '<button class="mini more" aria-label="管理">⋯</button>' : ''}
       <button class="mini acc">播放</button>`;
-    el.querySelector('button').onclick = e => { e.stopPropagation(); play(it); };
+    if (manage) {
+      el.querySelector('.more').onclick = e => { e.stopPropagation(); openItemSheet(it); };
+    }
+    el.querySelector('.acc').onclick = e => { e.stopPropagation(); play(it); };
     el.onclick = () => { S.selItem = it.id; renderItems(); };
     box.appendChild(el);
   }
 }
+
+/* ---------- 成品管理：改名 / 移除 ----------
+ *
+ * 两个动作都走 ss_commands 而不是直接改 PocketBase：清单同时存在两处，
+ * 而 Mac 那份 library.json 只有 Mac 自己能改。只在服务端删掉的行，会在下次
+ * 重连 syncLibrary 时原样长回来——一个会自己撤销的删除比没有删除更糟。
+ * 代价是管理和播放一样需要设备在线，这跟条目本身指向那台机器上的文件是一致的。
+ */
+function openItemSheet(it) {
+  S.manageItem = it;
+  $('#iName').value = it.name;
+  $('#iPath').textContent = it.localPath || '';
+  $('#itemErr').textContent = '';
+  disarmDelete();
+  $('#scrim').classList.remove('hide'); $('#itemSheet').classList.remove('hide');
+  requestAnimationFrame(() => {
+    $('#scrim').classList.add('show'); $('#itemSheet').classList.add('show');
+  });
+}
+
+function closeItemSheet() {
+  $('#scrim').classList.remove('show'); $('#itemSheet').classList.remove('show');
+  setTimeout(() => { $('#scrim').classList.add('hide'); $('#itemSheet').classList.add('hide'); }, 320);
+}
+
+function disarmDelete() {
+  const b = $('#iDel');
+  b.classList.remove('armed');
+  b.textContent = '从控制端移除';
+  clearTimeout(S.armTimer);
+}
+
+$('#iCancel').onclick = closeItemSheet;
+
+$('#iSave').onclick = async () => {
+  const it = S.manageItem, name = $('#iName').value.trim();
+  if (!it) return;
+  if (!name) { $('#itemErr').textContent = '名称不能为空'; return; }
+  if (name === it.name) return closeItemSheet();
+  closeItemSheet();
+  cmd('rename', { itemId: it.id, localPath: it.localPath, name });
+};
+
+$('#iDel').onclick = () => {
+  const b = $('#iDel'), it = S.manageItem;
+  if (!it) return;
+  // 一次点击不删东西。第二次才删，10 秒不确认就自己退回去。
+  if (!b.classList.contains('armed')) {
+    b.classList.add('armed');
+    b.textContent = '确认移除（不删 Mac 上的文件）';
+    S.armTimer = setTimeout(disarmDelete, 10000);
+    return;
+  }
+  disarmDelete();
+  closeItemSheet();
+  cmd('forget', { itemId: it.id, localPath: it.localPath });
+};
 
 /* ---------- 异步指令三态（3g） ---------- */
 async function cmd(action, payload = {}) {
@@ -740,7 +824,11 @@ function closeSheet() {
 }
 $('#addRule').onclick = openSheet;
 $('#cancelRule').onclick = closeSheet;
-$('#scrim').onclick = closeSheet;
+// 遮罩关的是「当前开着的那一层」，不是固定某一个。
+$('#scrim').onclick = () => {
+  if (!$('#itemSheet').classList.contains('hide')) return closeItemSheet();
+  closeSheet();
+};
 
 $('#mSeg').onclick = e => {
   const b = e.target.closest('button'); if (!b) return;
