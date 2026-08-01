@@ -2,7 +2,7 @@
 <html lang="zh-Hans">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -24,7 +24,16 @@
         --okText:#30D158; --badText:#FF453A; --accText:#0A84FF; --btText:#FF9F0A}
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-html,body{margin:0;height:100%}
+/* 装到桌面后要像原生 App：不缩放。
+ * 双指缩放和双击放大是两套机制，得分别堵：
+ *   touch-action:pan-y  —— 只允许纵向滚动，顺带干掉双击放大
+ *   gesture* 事件       —— iOS 的捏合走的是 WebKit 私有事件，
+ *                          光靠 viewport 的 user-scalable=no 拦不住
+ * 横向滚动的设备条和滑块各自声明自己需要的方向，否则会被一起锁死。 */
+html,body{margin:0;height:100%;touch-action:pan-y;-webkit-text-size-adjust:100%}
+.chips{touch-action:pan-x}
+input[type=range]{touch-action:none}
+main,.sheet{touch-action:pan-y}
 body{background:var(--bg);color:var(--t1);
   font:14px/1.5 -apple-system,"SF Pro Text","PingFang SC",system-ui,sans-serif;
   -webkit-font-smoothing:antialiased;overscroll-behavior-y:none}
@@ -810,6 +819,21 @@ setInterval(() => {
   renderNow(); renderChips();
   if (S.tab === 'sched') renderRules();
 }, 5000);
+
+/* ---------- 不缩放 ---------- */
+/* iOS 的捏合缩放是 WebKit 私有的 gesture 事件，viewport 的 user-scalable=no
+ * 在 Safari 里早就被忽略了；只有把这三个事件按住才真的不缩放。 */
+for (const t of ['gesturestart', 'gesturechange', 'gestureend'])
+  document.addEventListener(t, e => e.preventDefault(), { passive: false });
+
+/* 双击放大：touch-action 已经挡掉大部分，但 iOS 在部分元素上仍会触发，
+ * 300 ms 内的第二次点击直接吃掉。单击不受影响。 */
+let lastTap = 0;
+document.addEventListener('touchend', e => {
+  const now = Date.now();
+  if (now - lastTap < 300) e.preventDefault();
+  lastTap = now;
+}, { passive: false });
 
 if (S.token) start();
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
