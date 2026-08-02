@@ -143,6 +143,21 @@ input[type=range]{width:100%;accent-color:var(--accent);height:44px}
 .days i{width:19px;height:19px;border-radius:50%;background:var(--line);font-style:normal;
         font-size:10px;font-weight:600;color:var(--t3);display:flex;align-items:center;justify-content:center}
 .days i.on{background:var(--accent);color:#fff}
+/* 执行历史：徽章说的是「下次 / 正在」，这一行说「上次到底响没响」。
+   两个方向各一行，点开才展开明细——平时不许占第二行。 */
+.hist{display:flex;align-items:center;gap:6px;margin-top:11px;padding-top:10px;
+      border-top:.5px solid var(--line);font-size:12px;color:var(--t3);cursor:pointer}
+.hist b{font-weight:600}
+.hist .dot{flex:none;width:6px;height:6px;border-radius:50%;background:var(--t3)}
+.hist.ok .dot{background:var(--ok)}
+.hist.bad .dot{background:var(--bad)}
+.hist .grow{flex:1}
+.hist .chev{flex:none;font-size:10px;opacity:.6}
+.runs{margin-top:8px;display:flex;flex-direction:column;gap:5px}
+.runs div{display:flex;gap:8px;font-size:11.5px;color:var(--t3);align-items:baseline}
+.runs .num{flex:none;width:74px;color:var(--t2);font-weight:600}
+.runs .what{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.runs .bad{color:var(--badText)}
 
 nav{flex:none;display:flex;border-top:.5px solid var(--line);background:var(--card);
     padding-bottom:max(env(safe-area-inset-bottom),20px)}
@@ -405,7 +420,7 @@ const $ = s => document.querySelector(s);
 const S = {
   url: localStorage.ssUrl || 'https://baihe.yujiev.com:54812',
   token: localStorage.ssToken || '',
-  players: [], items: [], scheds: [], sel: null, selItem: null,
+  players: [], items: [], scheds: [], runs: [], openHist: null, sel: null, selItem: null,
   tab: 'now', es: null, retries: 0, cmd: 'idle', failMsg: '',
   cmdTimer: null, failTimer: null,
   manageItem: null, armTimer: null,
@@ -490,6 +505,9 @@ const reportsAudio = p => atLeast(p.appVersion, '0.11.0');
 const reportsCount = p => atLeast(p.appVersion, '0.17.0');
 // 改名/移除要 Mac 端配合改本机清单，老版本会回「不认识的指令」——那就别给按钮。
 const canManage = p => p && atLeast(p.appVersion, '0.13.0');
+// 执行日志是 0.18.0 才写的。老版本一行都不会有，照着渲染就会把每条定时规则
+// 都判成「到点了没在播」——一台工作正常的机器，满屏红字。
+const reportsRuns = p => p && atLeast(p.appVersion, '0.18.0');
 
 /* 五格电平条：数字读不出「大概多响」，格子可以 */
 const meter = lv => {
@@ -501,6 +519,49 @@ const clock = m => `${String((m / 60) | 0).padStart(2, '0')}:${String(m % 60).pa
 const sayWhen = f => !f ? '不会再响' : f.expired ? '已完成' : f.live ? '正在响'
   : f.days === 0 ? `今天 ${clock(f.at)}` : f.days === 1 ? `明天 ${clock(f.at)}`
   : `${f.days} 天后 ${clock(f.at)}`;
+
+/* PocketBase 发的是 "2026-08-02 10:11:12.345Z"，空格不是所有引擎都当 ISO 认 */
+const pbDate = v => new Date(String(v || '').replace(' ', 'T'));
+/* 东八区的钟点；不是今天就带上日期，否则「08:00」看不出是哪天的 08:00 */
+const cnTime = v => {
+  const d = pbDate(v);
+  if (isNaN(+d)) return '';
+  const p = cnParts(d);
+  return p.date === cnParts(new Date()).date ? clock(p.minutes)
+                                             : `${p.date.slice(5)} ${clock(p.minutes)}`;
+};
+
+/* 「此刻是不是正在这条规则的执行窗内」——和 Mac 端 PlaybackSchedule.take(at:) 同一套算术。
+ *
+ * nextFire 只回答「下一次什么时候」，而 daily 规则正在响的那半小时里它照样报明天：
+ * 于是规则卡在真正执行的时候反而什么状态都不说。两边各算一次是重复，但把它挪到
+ * 服务端就等于让「现在响不响」依赖一次网络往返——Mac 才是权威，这里是它的镜子。 */
+function liveTake(s, now = new Date()) {
+  if (!s.enabled || !s.localPath) return null;
+  const start = hhmm(s.startTime);
+  if (start == null) return null;
+  const p = cnParts(now);
+  if (s.mode === 'once') { if (s.date !== p.date) return null; }
+  else if (s.weekdays && s.weekdays.length && !s.weekdays.includes(p.weekday)) return null;
+  // 东八区没有夏令时，偏移是常数，所以锚点可以直接算出来
+  const elapsed = (now.getTime() - (Date.parse(p.date + 'T00:00:00+08:00') + start * 60000)) / 1000;
+  if (elapsed < 0) return null;
+
+  if (s.mode === 'window') {
+    const end = hhmm(s.endTime);
+    // 跨午夜的窗口 Mac 端就不支持（要求 end > start），这里跟着它，别自作主张
+    if (end == null || end <= start) return null;
+    return elapsed < (end - start) * 60 ? { elapsed, take: 0 } : null;
+  }
+  const takes = Math.max(1, s.repeatCount || 1);
+  const length = s.playSeconds > 0 ? s.playSeconds : 0;
+  if (!length) return elapsed < 3600 ? { elapsed, take: 0 } : null;   // 不限长：放完为止
+  const cycle = length + Math.max(0, s.gapSeconds || 0);
+  const i = Math.floor(elapsed / cycle);
+  if (i >= takes) return null;
+  const phase = elapsed - i * cycle;
+  return phase < length ? { elapsed: phase, take: i } : null;         // phase 落在间隔里 = 不在播
+}
 
 /* ---------- 登录 ---------- */
 $('#url').value = S.url;
@@ -878,6 +939,9 @@ const setTab = t => {
   $('#navSched').classList.toggle('sel', t === 'sched');
   [...$('#segTabs').children].forEach(b => b.classList.toggle('sel', b.dataset.t === t));
   $('#title').textContent = t === 'now' ? '现在' : '定时';
+  // 切过来就补读一次执行历史：在「现在」页时收到的 ss_runs 事件是不重读的，
+  // 否则每次定时开播都要把这一页也刷一遍。
+  if (t === 'sched' && S.sel) loadScheds().catch(() => {});
 };
 $('#navNow').onclick = () => setTab('now');
 $('#navSched').onclick = () => setTab('sched');
@@ -888,9 +952,83 @@ $('#segTabs').onclick = e => {
 
 /* ---------- 定时 ---------- */
 async function loadScheds() {
-  const r = await api('/api/collections/ss_schedules/records?perPage=200&sort=startTime&filter=' +
-                      encodeURIComponent(`player='${S.sel}'`));
-  S.scheds = r.items || []; renderRules();
+  const who = encodeURIComponent(`player='${S.sel}'`);
+  // 规则和它的执行历史一起取：分成两个入口，就会出现「规则刷新了、历史还是上一台
+  // 机器的」这种半新半旧的画面。
+  const [r, h] = await Promise.all([
+    api('/api/collections/ss_schedules/records?perPage=200&sort=startTime&filter=' + who),
+    api('/api/collections/ss_runs/records?perPage=150&sort=-created&filter=' + who)
+      .catch(() => ({ items: [] })),   // 老服务端没有这张表，规则本身照常显示
+  ]);
+  S.scheds = r.items || []; S.runs = h.items || [];
+  renderRules();
+}
+
+/* 这条规则的执行历史，新的在前 */
+const runsOf = id => S.runs.filter(r => r.schedule === id);
+
+/* 还开着的那次执行：最新一行是 start，说明还没收到收尾行 */
+function openRun(id) {
+  const rs = runsOf(id);
+  return rs.length && rs[0].event === 'start' ? rs[0] : null;
+}
+
+/* 规则卡右上角的一行结论。
+ *
+ * 以前它只会说「下次 08:00」——包括这条规则**正在响**的那半小时。执行中恰恰是
+ * 唯一想看一眼的时刻，而那时它显示的是一个和当下无关的未来时间。 */
+function ruleBadge(s, f, p) {
+  const open = openRun(s.id);
+  const inWindow = liveTake(s);
+
+  if (open && p && isLive(p) && p.state === 'playing') {
+    const on = (Date.now() - pbDate(open.created).getTime()) / 1000;
+    if (!reportsCount(p)) return ['正在播 · ' + fmt(on), 'ok'];
+    const n = p.soundCount || 0;
+    // 出声次数才是「这条链路确实通着」的证据：散布出来的一小时大半是静音，
+    // 按此刻响不响判，正常的执行也会十次有九次被报成无声。
+    if (n > 0) return [`响 ${n} 次 · ${fmt(on)}`, 'ok'];
+    if (on < 120) return [`等待出声 · ${fmt(on)}`, ''];
+    return [`播 ${Math.round(on / 60)} 分没出过声`, 'bad'];
+  }
+  // 到点了却没有任何执行——以前完全看不见的那种失败：Mac 退了、睡着了、
+  // 或者素材文件被挪走，8 点照样悄无声息地过去。
+  if (inWindow && reportsRuns(p)) {
+    const last = runsOf(s.id)[0];
+    if (last && last.event === 'missing') return ['文件不在，没响', 'bad'];
+    if (!open) return ['到点了 · 没在播', 'bad'];
+    return ['已停 · 未收到结束', 'bt'];
+  }
+  if (inWindow) return ['正在响', 'ok'];        // 老版本 Mac：只能按时间说
+  return [sayWhen(f), f && f.live ? 'ok' : ''];
+}
+
+/* 「上次到底响没响」。徽章说未来和现在，这一行说过去，各占一行。 */
+function lastRunLine(id) {
+  const rs = runsOf(id);
+  // 收尾行才带结论；只有 start 说明那次执行没有善终（App 被退掉了之类）
+  const r = rs.find(x => x.event !== 'start') || rs[0];
+  if (!r) return ['还没执行过', ''];
+  const when = cnTime(r.created);
+  if (r.event === 'missing') return [`${when} 文件不在「${r.itemName || '?'}」`, 'bad'];
+  if (r.event === 'failed') return [`${when} 播不出 · ${r.note || '失败'}`, 'bad'];
+  if (r.event === 'start') return [`${when} 开始 · 没有结束记录`, ''];
+  const n = r.soundCount || 0;
+  return n > 0 ? [`${when} 响 ${n} 次 · ${fmt(r.playedFor)}`, 'ok']
+               : [`${when} 一次没响 · ${fmt(r.playedFor)}`, 'bad'];
+}
+
+const RUN_WORDS = { start: '开始', end: '结束', missing: '文件不在', failed: '播不出' };
+
+function runDetail(r) {
+  if (r.event === 'end') {
+    const n = r.soundCount || 0;
+    return [n > 0 ? `响 ${n} 次 · 播了 ${fmt(r.playedFor)}` : `一次没响 · 播了 ${fmt(r.playedFor)}`,
+            n > 0 ? '' : 'bad'];
+  }
+  if (r.event === 'start') return [`开始 · ${r.itemName || ''}`, ''];
+  return [`${RUN_WORDS[r.event] || r.event}${r.itemName ? ' · ' + r.itemName : ''}`
+          + (r.note ? ` · ${r.note}` : ''), 'bad'];
 }
 
 /* 规则行上说清楚会响哪几段：单段就是名字，多段是「甲 → 乙 +2」。
@@ -911,6 +1049,7 @@ function renderRules() {
   }
   const nowMin = cnParts(new Date()).minutes;
   const pct = m => (m / 14.4);            // 一天 1440 分钟 → 百分比
+  const p = current();
   box.innerHTML = '';
   for (const s of S.scheds) {
     const f = nextFire(s);
@@ -944,6 +1083,11 @@ function renderRules() {
           `<i class="${!s.weekdays || !s.weekdays.length || s.weekdays.includes(i + 1) ? 'on' : ''}">${d}</i>`
         ).join('')}</div>`;
 
+    const [btext, bkind] = s.enabled ? ruleBadge(s, f, p) : ['已停用', ''];
+    const [htext, hkind] = lastRunLine(s.id);
+    const history = runsOf(s.id);
+    const opened = S.openHist === s.id;
+
     const el = document.createElement('div');
     el.className = 'rule' + (s.enabled && !(f && f.expired) ? '' : ' dim');
     el.innerHTML = `
@@ -952,16 +1096,29 @@ function renderRules() {
           <div class="rtime num">${esc(head)}</div>
           <div class="rbadges">${badges}</div>
         </div>
-        <span class="badge ${f && f.live ? 'ok' : ''}">${esc(s.enabled ? sayWhen(f) : '已停用')}</span>
+        <span class="badge ${bkind}">${esc(btext)}</span>
       </div>
       <div class="strip">${blocks}<u style="left:${pct(nowMin)}%"></u></div>
       ${days}
+      <div class="hist ${hkind}" data-a="h" title="最近这条规则真的响了没有">
+        <span class="dot"></span><b>${esc(htext)}</b><span class="grow"></span>
+        ${history.length ? `<span class="chev">${opened ? '收起' : history.length + ' 条'}</span>` : ''}
+      </div>
+      ${opened && history.length ? `<div class="runs">${history.slice(0, 12).map(r => {
+        const [txt, kind] = runDetail(r);
+        return `<div><span class="num">${esc(cnTime(r.created))}</span>`
+             + `<span class="what ${kind}">${esc(txt)}</span></div>`;
+      }).join('')}</div>` : ''}
       <div style="display:flex;gap:8px;margin-top:12px">
         <button class="mini" data-a="t">${s.enabled ? '停用' : '启用'}</button>
         <button class="mini" data-a="d">删除</button>
         <span class="grow"></span>
         <span class="cap" style="align-self:center;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(ruleItems(s))}</span>
       </div>`;
+    el.querySelector('[data-a=h]').onclick = () => {
+      S.openHist = opened ? null : s.id;
+      renderRules();
+    };
     el.querySelector('[data-a=t]').onclick = () =>
       api(`/api/collections/ss_schedules/records/${s.id}`,
           { method: 'PATCH', body: JSON.stringify({ enabled: !s.enabled }) }).then(loadScheds);
@@ -1125,7 +1282,7 @@ function connectRealtime() {
     S.retries = 0;
     await api('/api/realtime', { method: 'POST', body: JSON.stringify({
       clientId: JSON.parse(ev.data).clientId,
-      subscriptions: ['ss_players', 'ss_items', 'ss_schedules'] }) });
+      subscriptions: ['ss_players', 'ss_items', 'ss_schedules', 'ss_runs'] }) });
     setLink('已连接', 'ok');
     // 🔴 重连之后必须重新拉一遍。
     //
@@ -1146,6 +1303,9 @@ function connectRealtime() {
   });
   es.addEventListener('ss_items', () => { if (S.sel) loadItems(); });
   es.addEventListener('ss_schedules', () => { if (S.sel) loadScheds(); });
+  // 一次定时开播 / 收尾就是一行——收到就重读，规则卡上的「正在播」和「上次响没响」
+  // 才会在事情发生的那一刻变，而不是等到下一次 45 秒轮询。
+  es.addEventListener('ss_runs', () => { if (S.sel && S.tab === 'sched') loadScheds(); });
   es.onerror = () => setLink(`重连中 · 第 ${++S.retries} 次`, 'bt');
 }
 function setLink(text, kind) {
