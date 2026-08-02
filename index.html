@@ -173,6 +173,25 @@ nav svg{width:22px;height:22px;fill:currentColor}
        max-width:480px;margin:0 auto;max-height:90dvh;overflow-y:auto;
        transform:translateY(100%);transition:transform .32s cubic-bezier(.32,.72,0,1)}
 .sheet.show{transform:translateY(0)}
+/* 长表单：抓手+标题 和 结论+按钮 钉住，中间那段自己滚。整张卡一起滚的话，
+   往下看几眼就既不知道这是哪个弹窗，也找不到保存在哪儿。 */
+.sheet.tall{display:flex;flex-direction:column;overflow:hidden;padding-bottom:0}
+.sbody{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;
+       -webkit-overflow-scrolling:touch}
+.sfoot{flex:none;padding-top:10px;padding-bottom:max(env(safe-area-inset-bottom),20px);
+       border-top:.5px solid var(--line)}
+.sfoot .verdict{padding:0 0 10px}
+.sfoot .err{padding:0 0 8px}
+/* 标题下的那条线只在真的滚动之后出现——没滚的时候它什么也不说明。
+   用 ::after 而不是 border，免得线一出现整块内容往下跳一格。 */
+.sheet.tall h2{position:relative}
+.sheet.tall h2::after{content:'';position:absolute;left:-24px;right:-24px;bottom:-7px;
+                      height:.5px;background:var(--line);opacity:0;transition:opacity .15s}
+.sheet.tall.scrolled h2::after{opacity:1}
+/* 取消和保存并排：主次靠宽度和填充说，不靠上下位置。 */
+.btnrow{display:flex;gap:10px}
+.btnrow .ghost{flex:1;margin-top:0;height:52px;background:var(--card2);font-weight:500}
+.btnrow .primary{flex:1.8}
 .grab{width:36px;height:5px;border-radius:3px;background:var(--line2);margin:0 auto 12px}
 .sheet h2{font-size:17px;font-weight:600;margin:0 0 14px}
 .seg{display:flex;background:var(--card2);border-radius:9px;padding:3px;margin-bottom:12px}
@@ -263,8 +282,11 @@ nav svg{width:22px;height:22px;fill:currentColor}
   .stepper button{width:36px;height:36px;font-size:17px}
   .daypick button{width:36px;height:36px}
   .daypick i{width:28px;height:28px;font-size:12px}
+  .sheet.tall{padding-bottom:0}
+  .sfoot{padding-bottom:18px}
   .primary{height:40px;font-size:15px;border-radius:9px}
   .ghost{height:34px;font-size:14px}
+  .btnrow .ghost{height:40px;border-radius:9px;font-size:15px}
   #login{max-width:400px;margin:0 auto}
   #login h2{font-size:20px}
 }
@@ -341,9 +363,12 @@ nav svg{width:22px;height:22px;fill:currentColor}
 </div>
 
 <div id="scrim" class="scrim hide"></div>
-<div id="sheet" class="sheet hide">
+<!-- 表单比一屏长，所以标题和按钮钉住、只有中间滚：滚到哪儿都看得见
+     这是哪个弹窗、结论是什么、保存在哪儿。 -->
+<div id="sheet" class="sheet tall hide">
   <div class="grab"></div>
   <h2 id="sheetTitle">新建定时</h2>
+  <div class="sbody">
   <!-- 播什么放在最前面：以前它是隐式的（用「当前选中的那个成品」），
        屏幕上根本没有一处说这条规则会响哪一段。 -->
   <div class="fcard" id="grpPick" style="padding:8px 12px">
@@ -383,11 +408,16 @@ nav svg{width:22px;height:22px;fill:currentColor}
     <div class="cap">只在这些天（不选＝每天）</div>
     <div class="daypick" id="dayPick"></div>
   </div>
+  </div><!-- /.sbody -->
 
-  <div class="verdict" id="verdict"></div>
-  <div id="sheetErr" class="err"></div>
-  <button id="saveRule" class="primary">保存</button>
-  <button id="cancelRule" class="ghost">取消</button>
+  <div class="sfoot">
+    <div class="verdict" id="verdict"></div>
+    <div id="sheetErr" class="err"></div>
+    <div class="btnrow">
+      <button id="cancelRule" class="ghost">取消</button>
+      <button id="saveRule" class="primary">保存</button>
+    </div>
+  </div>
 </div>
 
 <div id="itemSheet" class="sheet hide">
@@ -1349,6 +1379,9 @@ function openSheet(rule) {
 
   renderPick();
   syncSheet();
+  // 上一次滚到哪儿了不该带到下一次：打开时该看到的是第一栏「播放内容」。
+  $('#sheet').querySelector('.sbody').scrollTop = 0;
+  $('#sheet').classList.remove('scrolled');   // 归零不触发 scroll 事件
   $('#scrim').classList.remove('hide'); $('#sheet').classList.remove('hide');
   requestAnimationFrame(() => { $('#scrim').classList.add('show'); $('#sheet').classList.add('show'); });
 }
@@ -1357,6 +1390,13 @@ function closeSheet() {
   setTimeout(() => { $('#scrim').classList.add('hide'); $('#sheet').classList.add('hide'); }, 320);
 }
 // 包一层：onclick 会把事件对象当第一个参数传进去，那会被当成「要修改的规则」
+// 滚起来了才给标题一条底线：固定的头和滚动的内容之间需要一道边界，
+// 而没滚的时候画一条线只是多一道横杠。
+{
+  const sb = $('#sheet').querySelector('.sbody');
+  sb.addEventListener('scroll',
+    () => $('#sheet').classList.toggle('scrolled', sb.scrollTop > 2), { passive: true });
+}
 $('#addRule').onclick = () => openSheet();
 $('#cancelRule').onclick = closeSheet;
 // 遮罩关的是「当前开着的那一层」，不是固定某一个。
