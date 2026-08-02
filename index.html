@@ -343,7 +343,7 @@ nav svg{width:22px;height:22px;fill:currentColor}
 <div id="scrim" class="scrim hide"></div>
 <div id="sheet" class="sheet hide">
   <div class="grab"></div>
-  <h2>新建定时</h2>
+  <h2 id="sheetTitle">新建定时</h2>
   <!-- 播什么放在最前面：以前它是隐式的（用「当前选中的那个成品」），
        屏幕上根本没有一处说这条规则会响哪一段。 -->
   <div class="fcard" id="grpPick" style="padding:8px 12px">
@@ -1173,6 +1173,7 @@ function renderRules() {
              + `<span class="what ${kind}">${esc(txt)}</span></div>`;
       }).join('')}</div>` : ''}
       <div style="display:flex;gap:8px;margin-top:12px">
+        <button class="mini" data-a="e">修改</button>
         <button class="mini" data-a="t">${s.enabled ? '停用' : '启用'}</button>
         <button class="mini" data-a="d">删除</button>
         <span class="grow"></span>
@@ -1182,6 +1183,7 @@ function renderRules() {
       S.openHist = opened ? null : s.id;
       renderRules();
     };
+    el.querySelector('[data-a=e]').onclick = () => openSheet(s);
     el.querySelector('[data-a=t]').onclick = () =>
       api(`/api/collections/ss_schedules/records/${s.id}`,
           { method: 'PATCH', body: JSON.stringify({ enabled: !s.enabled }) }).then(loadScheds);
@@ -1196,7 +1198,8 @@ function renderRules() {
  * 存进去的 gapSeconds 仍是后者（Mac 端的语义没变），保存时换算。
  * 以前这一栏叫「间隔」，填 1 小时实际周期是 1 小时零 30 秒——「每隔 1 小时」
  * 是用户说的话，就该是用户填的数。 */
-const F = { mode: 'daily', play: 30, rep: 3, period: 120, jitter: 0, days: [], pick: [] };
+const F = { mode: 'daily', play: 30, rep: 3, period: 120, jitter: 0, days: [], pick: [],
+            editing: null, dropped: 0 };
 /* 秒数按档跳，不弹键盘也不用滑块（3e）。每一栏的量级差得很远，共用一张表
  * 会让「每隔」从 10 分一步跳到 30 分，也让「波动」一路能拨到几小时。 */
 const STEPS = {
@@ -1252,11 +1255,45 @@ function renderPick() {
 
 const pickedItems = () => F.pick.map(id => S.items.find(i => i.id === id)).filter(Boolean);
 
-function openSheet() {
-  if (!S.items.length) { $('#sheetErr').textContent = ''; setTab('now'); return; }
-  $('#fDate').value = cnParts(new Date()).date;
-  // 开局带上「现在」页选中的那一段，保留原来的顺手，但现在它是看得见的。
-  F.pick = S.selItem && S.items.some(i => i.id === S.selItem) ? [S.selItem] : [];
+/* 打开表单。传一条规则进来就是修改它，不传就是新建。
+ *
+ * 同一个弹窗两用而不是复制一份：新建和修改是同一组字段、同一套换算、同一行结论，
+ * 分成两份就会在其中一份里漏掉「每隔是周期不是间隔」这类换算。 */
+function openSheet(rule) {
+  if (!S.items.length && !rule) { $('#sheetErr').textContent = ''; setTab('now'); return; }
+  $('#sheetErr').textContent = '';
+  F.editing = rule ? rule.id : null;
+  $('#sheetTitle').textContent = rule ? '修改定时' : '新建定时';
+  $('#saveRule').textContent = rule ? '保存修改' : '保存';
+
+  if (rule) {
+    F.mode = rule.mode || 'daily';
+    F.play = rule.playSeconds || 30;
+    F.rep = rule.repeatCount || 1;
+    // 存的是「上次结束→下次开始」，表单问的是「开始→开始」，在这里换回去
+    F.period = (rule.playSeconds || 0) + (rule.gapSeconds || 0);
+    F.jitter = rule.jitterSeconds || 0;
+    F.days = [...(rule.weekdays || [])];
+    // 素材可能已经被移除了：留着一个指向不存在条目的勾，保存时会写出一条播不响
+    // 的规则。滤掉，并在结论行里说这件事。
+    const listed = (rule.items && rule.items.length ? rule.items
+                    : (rule.item ? [{ id: rule.item }] : []));
+    F.pick = listed.map(i => i.id).filter(id => S.items.some(x => x.id === id));
+    F.dropped = listed.length - F.pick.length;
+    $('#fDate').value = rule.date || cnParts(new Date()).date;
+    $('#fStart').value = rule.startTime || '22:00';
+    $('#fEnd').value = rule.endTime || '23:00';
+  } else {
+    F.mode = 'daily'; F.play = 30; F.rep = 3; F.period = 120; F.jitter = 0;
+    F.days = []; F.dropped = 0;
+    $('#fDate').value = cnParts(new Date()).date;
+    // 开局带上「现在」页选中的那一段，保留原来的顺手，但现在它是看得见的。
+    F.pick = S.selItem && S.items.some(i => i.id === S.selItem) ? [S.selItem] : [];
+  }
+  $('#shStart').textContent = $('#fStart').value;
+  $('#shEnd').textContent = $('#fEnd').value;
+  [...$('#mSeg').children].forEach(x => x.classList.toggle('sel', x.dataset.m === F.mode));
+
   renderPick();
   syncSheet();
   $('#scrim').classList.remove('hide'); $('#sheet').classList.remove('hide');
@@ -1266,7 +1303,8 @@ function closeSheet() {
   $('#scrim').classList.remove('show'); $('#sheet').classList.remove('show');
   setTimeout(() => { $('#scrim').classList.add('hide'); $('#sheet').classList.add('hide'); }, 320);
 }
-$('#addRule').onclick = openSheet;
+// 包一层：onclick 会把事件对象当第一个参数传进去，那会被当成「要修改的规则」
+$('#addRule').onclick = () => openSheet();
 $('#cancelRule').onclick = closeSheet;
 // 遮罩关的是「当前开着的那一层」，不是固定某一个。
 $('#scrim').onclick = () => {
@@ -1330,17 +1368,25 @@ function syncSheet() {
             : !total ? ''
             : F.play > total ? `共 ${fmt(total)}，不够 ${fmt(F.play)}，会循环滚动`
             : `共 ${fmt(total)}，到 ${fmt(F.play)} 就停`;
+  // 改一条正在播的规则会当场重来（Mac 每 0.5 s 按新规则重算落点），不是等这次放完。
+  // 这是唯一一个「按下保存会立刻发出声音变化」的情况，所以它自己一行、红字。
+  const nowLive = F.editing && S.scheds.some(x => x.id === F.editing && liveTake(x));
+  const warn = nowLive
+    ? '<br><span style="font-size:12px;color:var(--badText)">这条正在播 · 保存后立刻按新设置重来</span>'
+    : '';
+  const lost = F.dropped > 0
+    ? `<br><span style="font-size:12px;color:var(--badText)">原有 ${F.dropped} 段已不在可播清单里，已去掉</span>` : '';
   $('#verdict').innerHTML = f
-    ? `首次将在 <b>${esc(sayWhen(f))}</b> 响 · ${esc(how)}<br>
-       <span style="font-size:12px;color:var(--t3)">${esc(names)}${fit ? ' · ' + esc(fit) : ''}</span>`
-    : '<b>不会触发</b> · 检查日期或星期';
+    ? `${F.editing ? '下次将在' : '首次将在'} <b>${esc(sayWhen(f))}</b> 响 · ${esc(how)}<br>
+       <span style="font-size:12px;color:var(--t3)">${esc(names)}${fit ? ' · ' + esc(fit) : ''}</span>${warn}${lost}`
+    : '<b>不会触发</b> · 检查日期或星期' + lost;
 }
 
 /* 表单当前状态 → 一条规则。预告和保存共用它，两边就不可能算出不同的东西。
    id 只影响波动的种子；新建时还没有 id，用一个占位的，预告出来的分秒会和
    保存后差一点——这是**没法消除**的（种子必须来自服务端发的 id），所以预告
    里说的是「前后 ±5 分随机」，不是一个精确到秒的假时刻。 */
-function draftRule(id = 'draft') {
+function draftRule(id = F.editing || 'draft') {
   return {
     id, enabled: true, localPath: (pickedItems()[0] || {}).localPath || '/x',
     mode: F.mode, date: $('#fDate').value,
@@ -1355,20 +1401,28 @@ $('#saveRule').onclick = async () => {
   const chosen = pickedItems();
   if (!chosen.length) { $('#sheetErr').textContent = '先选要播放的内容'; return; }
   const it = chosen[0];
+  const body = {
+    player: S.sel, item: it.id, itemName: it.name, localPath: it.localPath,
+    // items 是事实源；itemName / localPath 留着，老版本 Mac 只认得它们，
+    // 至少还能播到第一段而不是彻底不响。
+    items: chosen.map(i => ({ id: i.id, name: i.name,
+                              localPath: i.localPath, duration: i.duration || 0 })),
+    mode: F.mode, date: $('#fDate').value,
+    startTime: $('#fStart').value, endTime: $('#fEnd').value,
+    weekdays: [...F.days].sort((a, b) => a - b),
+    // 存的仍是「上次结束到下次开始」——Mac 端语义没动，换算放在这一处
+    playSeconds: F.play, repeatCount: F.rep,
+    gapSeconds: Math.max(0, F.period - F.play), jitterSeconds: F.jitter,
+  };
   try {
-    await api('/api/collections/ss_schedules/records', { method: 'POST',
-      body: JSON.stringify({
-        player: S.sel, item: it.id, itemName: it.name, localPath: it.localPath,
-        // items 是事实源；itemName / localPath 留着，老版本 Mac 只认得它们，
-        // 至少还能播到第一段而不是彻底不响。
-        items: chosen.map(i => ({ id: i.id, name: i.name,
-                                  localPath: i.localPath, duration: i.duration || 0 })),
-        enabled: true, mode: F.mode, date: $('#fDate').value,
-        startTime: $('#fStart').value, endTime: $('#fEnd').value,
-        weekdays: [...F.days].sort((a, b) => a - b),
-        // 存的仍是「上次结束到下次开始」——Mac 端语义没动，换算放在这一处
-        playSeconds: F.play, repeatCount: F.rep,
-        gapSeconds: Math.max(0, F.period - F.play), jitterSeconds: F.jitter }) });
+    if (F.editing) {
+      // 不写 enabled：停用中的规则改完不该被偷偷打开，那是另一个按钮的事
+      await api(`/api/collections/ss_schedules/records/${F.editing}`,
+                { method: 'PATCH', body: JSON.stringify(body) });
+    } else {
+      await api('/api/collections/ss_schedules/records',
+                { method: 'POST', body: JSON.stringify({ ...body, enabled: true }) });
+    }
     closeSheet(); loadScheds();
   } catch (e) { $('#sheetErr').textContent = String(e.message || e); }
 };
