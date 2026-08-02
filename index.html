@@ -373,8 +373,10 @@ nav svg{width:22px;height:22px;fill:currentColor}
       <div class="stepper"><button data-s="play" data-d="-1">−</button><span id="vPlay" class="num">30 s</span><button data-s="play" data-d="1">＋</button></div></div>
     <div class="frow"><span class="flabel">重复次数</span>
       <div class="stepper"><button data-s="rep" data-d="-1">−</button><span id="vRep" class="num">3 次</span><button data-s="rep" data-d="1">＋</button></div></div>
-    <div class="frow"><span class="flabel">间隔</span>
-      <div class="stepper"><button data-s="gap" data-d="-1">−</button><span id="vGap" class="num">60 s</span><button data-s="gap" data-d="1">＋</button></div></div>
+    <div class="frow"><span class="flabel">每隔</span>
+      <div class="stepper"><button data-s="period" data-d="-1">−</button><span id="vGap" class="num">2 分</span><button data-s="period" data-d="1">＋</button></div></div>
+    <div class="frow"><span class="flabel">随机波动</span>
+      <div class="stepper"><button data-s="jitter" data-d="-1">−</button><span id="vJit" class="num">不波动</span><button data-s="jitter" data-d="1">＋</button></div></div>
   </div>
 
   <div class="fcard" id="grpDays" style="padding:8px 12px">
@@ -461,6 +463,29 @@ const cnParts = d => {
 };
 const hhmm = t => { const p = String(t || '').split(':'); return p.length === 2 ? +p[0] * 60 + +p[1] : null; };
 
+/* 今天还没到的下一次，返回当天第几分钟；今天已经放完了返回 null。
+ *
+ * 🔴 以前「今天过了起始时间就直接跳到明天」——一条每小时响一次的规则，
+ * 10 点看它会说「明天 08:00」，而它 11 点就要响。重复次数一多这就全错。 */
+function nextSlotToday(s, now) {
+  const sl = takeSlots(s, now);
+  if (!sl) return null;
+  const midnight = Date.parse(cnParts(now).date + 'T00:00:00+08:00');
+  const t = (now.getTime() - sl.anchor) / 1000;
+  for (const begin of sl.at) {
+    if (begin > t) return Math.round((sl.anchor + begin * 1000 - midnight) / 60000);
+  }
+  return null;
+}
+
+/* 未来某一天的第一次。波动的种子里有日期，所以要按那天算，不是按今天。 */
+function firstSlotOn(s, day) {
+  const start = hhmm(s.startTime);
+  if (start == null) return start;
+  if (s.mode === 'window' || !(s.playSeconds > 0)) return start;
+  return Math.round(start + wander(s, 0, day) / 60);
+}
+
 /* 「下一次什么时候响」—— 用户唯一真正要的答案，所以它是每条规则的主结论 */
 function nextFire(s, now = new Date()) {
   const start = hhmm(s.startTime);
@@ -473,21 +498,25 @@ function nextFire(s, now = new Date()) {
     if (!s.date) return null;
     const days = Math.round((Date.parse(s.date + 'T00:00:00Z') -
                              Date.parse(nowP.date + 'T00:00:00Z')) / 86400000);
-    if (days < 0 || (days === 0 && nowP.minutes >= start)) return { expired: true };
-    return { at: start, days, live: false };
+    if (days < 0) return { expired: true };
+    if (days === 0) {
+      if (liveTake(s, now)) return { at: nowP.minutes, days: 0, live: true };
+      const nx = nextSlotToday(s, now);
+      return nx == null ? { expired: true } : { at: nx, days: 0, live: false };
+    }
+    return { at: firstSlotOn(s, s.date), days, live: false };
   }
 
   for (let d = 0; d < 8; d++) {
     const p = cnParts(new Date(now.getTime() + d * 86400000));
     if (s.weekdays && s.weekdays.length && !s.weekdays.includes(p.weekday)) continue;
-    if (d === 0 && nowP.minutes >= start) {
-      if (s.mode === 'window') {
-        const end = hhmm(s.endTime);
-        if (end != null && (end > start ? nowP.minutes < end : true)) return { at: start, days: 0, live: true };
-      }
-      continue;
+    if (d === 0) {
+      if (liveTake(s, now)) return { at: start, days: 0, live: true };
+      const nx = nextSlotToday(s, now);
+      if (nx != null) return { at: nx, days: 0, live: false };
+      continue;                                  // 今天的都放完了，看明天
     }
-    return { at: start, days: d, live: false };
+    return { at: firstSlotOn(s, p.date), days: d, live: false };
   }
   return null;
 }
@@ -537,6 +566,19 @@ const cnTime = v => {
  * 于是规则卡在真正执行的时候反而什么状态都不说。两边各算一次是重复，但把它挪到
  * 服务端就等于让「现在响不响」依赖一次网络往返——Mac 才是权威，这里是它的镜子。 */
 function liveTake(s, now = new Date()) {
+  const slots = takeSlots(s, now);
+  if (!slots) return null;
+  const t = (now.getTime() - slots.anchor) / 1000;
+  for (let i = 0; i < slots.at.length; i++) {
+    const begin = slots.at[i];
+    if (t >= begin && t < begin + slots.length) return { elapsed: t - begin, take: i };
+  }
+  return null;
+}
+
+/* 每一次的起点（相对当天锚点的秒数）。liveTake 和「下次什么时候」都从这里来，
+   算一次就不会出现「徽章说在播、下一次却算成明天」这种自相矛盾。 */
+function takeSlots(s, now = new Date()) {
   if (!s.enabled || !s.localPath) return null;
   const start = hhmm(s.startTime);
   if (start == null) return null;
@@ -544,23 +586,40 @@ function liveTake(s, now = new Date()) {
   if (s.mode === 'once') { if (s.date !== p.date) return null; }
   else if (s.weekdays && s.weekdays.length && !s.weekdays.includes(p.weekday)) return null;
   // 东八区没有夏令时，偏移是常数，所以锚点可以直接算出来
-  const elapsed = (now.getTime() - (Date.parse(p.date + 'T00:00:00+08:00') + start * 60000)) / 1000;
-  if (elapsed < 0) return null;
+  const anchor = Date.parse(p.date + 'T00:00:00+08:00') + start * 60000;
 
   if (s.mode === 'window') {
     const end = hhmm(s.endTime);
     // 跨午夜的窗口 Mac 端就不支持（要求 end > start），这里跟着它，别自作主张
     if (end == null || end <= start) return null;
-    return elapsed < (end - start) * 60 ? { elapsed, take: 0 } : null;
+    return { anchor, day: p.date, length: (end - start) * 60, at: [0] };
   }
   const takes = Math.max(1, s.repeatCount || 1);
   const length = s.playSeconds > 0 ? s.playSeconds : 0;
-  if (!length) return elapsed < 3600 ? { elapsed, take: 0 } : null;   // 不限长：放完为止
+  if (!length) return { anchor, day: p.date, length: 3600, at: [0] };  // 不限长：放完为止
   const cycle = length + Math.max(0, s.gapSeconds || 0);
-  const i = Math.floor(elapsed / cycle);
-  if (i >= takes) return null;
-  const phase = elapsed - i * cycle;
-  return phase < length ? { elapsed: phase, take: i } : null;         // phase 落在间隔里 = 不在播
+  const at = [];
+  for (let i = 0; i < takes; i++) at.push(i * cycle + wander(s, i, p.date));
+  return { anchor, day: p.date, length, at };
+}
+
+/* 🔴 和 Mac 端 PlaybackSchedule.wander 必须逐位一致，否则控制端说 08:03、
+ * Mac 08:07 才响，而两边各自都"对"。差异只会在真到点那一刻暴露。
+ *
+ * FNV-1a + 末尾雪崩，走 UTF-8 字节。种子是 PocketBase id + 日期 + 整数，
+ * 全 ASCII，所以这里按码元取和 Swift 按字节取结果相同——喂进非 ASCII 就会
+ * 悄悄分家。乘法必须走 Math.imul：普通 * 超过 2^53 就丢精度，和 Swift 的
+ * &* 环绕语义对不上。 */
+function wander(s, index, day) {
+  const spread = Math.max(0, s.jitterSeconds || 0);
+  if (!(spread > 0)) return 0;
+  const seed = `${s.id}|${day}#${index}`;
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < seed.length; i++) h = Math.imul(h ^ seed.charCodeAt(i), 16777619) >>> 0;
+  h = (h ^ (h >>> 15)) >>> 0; h = Math.imul(h, 2246822519) >>> 0;
+  h = (h ^ (h >>> 13)) >>> 0; h = Math.imul(h, 3266489917) >>> 0;
+  h = (h ^ (h >>> 16)) >>> 0;
+  return (h / 4294967295 * 2 - 1) * spread;
 }
 
 /* ---------- 登录 ---------- */
@@ -1066,17 +1125,21 @@ function renderRules() {
         ? `<b${kind} style="left:${pct(start)}%;width:${pct(end - start)}%"></b>`
         : `<b${kind} style="left:${pct(start)}%;right:0"></b><b${kind} style="left:0;width:${pct(end)}%"></b>`;
     } else {
-      const takes = Math.max(1, s.repeatCount || 1);
-      const cycleMin = ((s.playSeconds || 0) + (s.gapSeconds || 0)) / 60;
+      // 画的是真正会响的落点（含波动），不是名义网格：这条带子存在的意义就是
+      // 「什么时候响」，画成等间距等于把随机波动这件事又藏起来了。
+      const sl = takeSlots({ ...s, enabled: true }, new Date());
       const wide = Math.max(0.5, pct((s.playSeconds || 60) / 60));
-      for (let i = 0; i < takes && i < 60; i++)
-        blocks += `<b${kind} style="left:${pct(start + i * cycleMin)}%;width:${wide}%"></b>`;
+      const at = sl ? sl.at : [0];
+      for (let i = 0; i < at.length && i < 60; i++)
+        blocks += `<b${kind} style="left:${pct(start + at[i] / 60)}%;width:${wide}%"></b>`;
     }
 
+    const period = (s.playSeconds || 0) + (s.gapSeconds || 0);
     const badges = s.mode === 'window'
       ? '<span class="badge">持续</span>'
-      : `<span class="badge">${s.playSeconds || 0} s</span><span class="badge">× ${s.repeatCount || 1}</span>`
-        + (s.gapSeconds ? `<span class="badge">间隔 ${s.gapSeconds} s</span>` : '');
+      : `<span class="badge">${secs(s.playSeconds || 0)}</span><span class="badge">× ${s.repeatCount || 1}</span>`
+        + ((s.repeatCount || 1) > 1 ? `<span class="badge">每隔 ${secs(period)}</span>` : '')
+        + (s.jitterSeconds ? `<span class="badge">± ${secs(s.jitterSeconds)}</span>` : '');
 
     const days = s.mode === 'once' ? ''
       : `<div class="days">${DAYS.map((d, i) =>
@@ -1129,14 +1192,33 @@ function renderRules() {
 }
 
 /* ---------- 新建规则 ---------- */
-const F = { mode: 'daily', play: 30, rep: 3, gap: 60, days: [], pick: [] };
-/* 秒数按档跳，不弹键盘也不用滑块（3e） */
-const STEPS = [5, 10, 15, 30, 60, 120, 300, 600, 1800, 3600];
-function stepVal(v, d) {
-  if (d > 0) return STEPS.find(x => x > v) ?? STEPS[STEPS.length - 1];
-  const below = STEPS.filter(x => x < v);
-  return below.length ? below[below.length - 1] : STEPS[0];
+/* 🔴 period 是「开始到开始」，不是「上次结束到下次开始」。
+ * 存进去的 gapSeconds 仍是后者（Mac 端的语义没变），保存时换算。
+ * 以前这一栏叫「间隔」，填 1 小时实际周期是 1 小时零 30 秒——「每隔 1 小时」
+ * 是用户说的话，就该是用户填的数。 */
+const F = { mode: 'daily', play: 30, rep: 3, period: 120, jitter: 0, days: [], pick: [] };
+/* 秒数按档跳，不弹键盘也不用滑块（3e）。每一栏的量级差得很远，共用一张表
+ * 会让「每隔」从 10 分一步跳到 30 分，也让「波动」一路能拨到几小时。 */
+const STEPS = {
+  play:   [5, 10, 15, 30, 60, 120, 300, 600, 1800, 3600],
+  period: [30, 60, 120, 300, 600, 900, 1800, 2700, 3600, 5400, 7200, 10800, 21600, 43200],
+  jitter: [0, 15, 30, 60, 120, 300, 600, 900, 1800],
+};
+function stepVal(key, v, d) {
+  const t = STEPS[key];
+  if (d > 0) return t.find(x => x > v) ?? t[t.length - 1];
+  const below = t.filter(x => x < v);
+  return below.length ? below[below.length - 1] : t[0];
 }
+/* 「3600 s」认不出是一小时。读数一律说人话，全精度只留给机器看的地方。 */
+const secs = v => {
+  v = Math.round(v || 0);
+  if (v < 60) return v + ' 秒';
+  const m = Math.round(v / 60);
+  if (m < 60) return m + ' 分';
+  const h = (m / 60) | 0, r = m % 60;
+  return r ? `${h} 小时 ${r} 分` : `${h} 小时`;
+};
 
 /* ---------- 定时播什么 ----------
  *
@@ -1206,7 +1288,9 @@ $('#fDate').oninput = syncSheet;
 document.querySelectorAll('.stepper button').forEach(b => b.onclick = () => {
   const k = b.dataset.s, d = +b.dataset.d;
   if (k === 'rep') F.rep = Math.max(1, Math.min(99, F.rep + d));
-  else F[k] = stepVal(F[k], d);
+  else F[k] = stepVal(k, F[k], d);
+  // 周期短于单次时长就没有周期可言了，把它顶上去而不是留个说不通的组合
+  if (F.period < F.play) F.period = STEPS.period.find(x => x >= F.play) ?? F.play;
   syncSheet();
 });
 
@@ -1225,16 +1309,18 @@ function syncSheet() {
   $('#grpTake').classList.toggle('hide', F.mode === 'window');
   $('#grpDays').classList.toggle('hide', F.mode === 'once');
   $('#labStart').textContent = F.mode === 'window' ? '开始' : '时间';
-  $('#vPlay').textContent = F.play + ' s';
+  $('#vPlay').textContent = secs(F.play);
   $('#vRep').textContent = F.rep + ' 次';
-  $('#vGap').textContent = F.gap + ' s';
+  $('#vGap').textContent = secs(F.period);
+  $('#vJit').textContent = F.jitter ? '± ' + secs(F.jitter) : '不波动';
   [...$('#dayPick').children].forEach(b => b.classList.toggle('on', F.days.includes(+b.dataset.d)));
 
-  // 底部实时结论：保存前就能确认，代替所有说明文字
-  const f = nextFire({ enabled: true, mode: F.mode, date: $('#fDate').value,
-                       startTime: $('#fStart').value, endTime: $('#fEnd').value, weekdays: F.days });
-  const it = S.items.find(i => i.id === S.selItem) || S.items[0];
-  const how = F.mode === 'window' ? '持续到结束时间' : `${F.play} 秒 × ${F.rep} 次`;
+  // 底部实时结论：保存前就能确认，代替所有说明文字。
+  // 用一条和保存时一模一样的规则去算，否则预告和实际会各说各话。
+  const f = nextFire(draftRule());
+  const how = F.mode === 'window' ? '持续到结束时间'
+            : `${secs(F.play)} × ${F.rep} 次` + (F.rep > 1 ? ` · 每隔 ${secs(F.period)}` : '')
+              + (F.jitter ? ` · 前后 ±${secs(F.jitter)} 随机` : '');
   // 一行结论：什么时候响、放什么、放不放得完。够不够放是这里唯一值得算的事——
   // 差额靠循环补上，用户不该自己去做这道减法。
   const chosen = pickedItems();
@@ -1248,6 +1334,20 @@ function syncSheet() {
     ? `首次将在 <b>${esc(sayWhen(f))}</b> 响 · ${esc(how)}<br>
        <span style="font-size:12px;color:var(--t3)">${esc(names)}${fit ? ' · ' + esc(fit) : ''}</span>`
     : '<b>不会触发</b> · 检查日期或星期';
+}
+
+/* 表单当前状态 → 一条规则。预告和保存共用它，两边就不可能算出不同的东西。
+   id 只影响波动的种子；新建时还没有 id，用一个占位的，预告出来的分秒会和
+   保存后差一点——这是**没法消除**的（种子必须来自服务端发的 id），所以预告
+   里说的是「前后 ±5 分随机」，不是一个精确到秒的假时刻。 */
+function draftRule(id = 'draft') {
+  return {
+    id, enabled: true, localPath: (pickedItems()[0] || {}).localPath || '/x',
+    mode: F.mode, date: $('#fDate').value,
+    startTime: $('#fStart').value, endTime: $('#fEnd').value,
+    weekdays: F.days, playSeconds: F.play, repeatCount: F.rep,
+    gapSeconds: Math.max(0, F.period - F.play), jitterSeconds: F.jitter,
+  };
 }
 
 $('#saveRule').onclick = async () => {
@@ -1266,7 +1366,9 @@ $('#saveRule').onclick = async () => {
         enabled: true, mode: F.mode, date: $('#fDate').value,
         startTime: $('#fStart').value, endTime: $('#fEnd').value,
         weekdays: [...F.days].sort((a, b) => a - b),
-        playSeconds: F.play, repeatCount: F.rep, gapSeconds: F.gap }) });
+        // 存的仍是「上次结束到下次开始」——Mac 端语义没动，换算放在这一处
+        playSeconds: F.play, repeatCount: F.rep,
+        gapSeconds: Math.max(0, F.period - F.play), jitterSeconds: F.jitter }) });
     closeSheet(); loadScheds();
   } catch (e) { $('#sheetErr').textContent = String(e.message || e); }
 };
