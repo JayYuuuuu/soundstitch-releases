@@ -537,6 +537,8 @@ const canManage = p => p && atLeast(p.appVersion, '0.13.0');
 // 执行日志是 0.18.0 才写的。老版本一行都不会有，照着渲染就会把每条定时规则
 // 都判成「到点了没在播」——一台工作正常的机器，满屏红字。
 const reportsRuns = p => p && atLeast(p.appVersion, '0.18.0');
+// 「停这一次」靠 Mac 认得 pausedTake。老版本会照播不误，给了按钮等于给个假开关。
+const canPause = p => p && atLeast(p.appVersion, '0.21.0');
 
 /* 五格电平条：数字读不出「大概多响」，格子可以 */
 const meter = lv => {
@@ -574,6 +576,27 @@ function liveTake(s, now = new Date()) {
     if (t >= begin && t < begin + slots.length) return { elapsed: t - begin, take: i };
   }
   return null;
+}
+
+/* 此刻名义上该响的那一次的起点，epoch 秒；不在窗内返回 null。
+ *
+ * 🔴 故意**不看** pausedTake：控制端必须分得清「没在播」和「被叫停了」——
+ * 前者是故障要报红，后者是用户自己按的，报红就是在骂人。 */
+function currentTakeAt(s, now = new Date()) {
+  const sl = takeSlots(s, now);
+  if (!sl) return null;
+  const t = (now.getTime() - sl.anchor) / 1000;
+  for (const begin of sl.at) {
+    if (t >= begin && t < begin + sl.length) return Math.round((sl.anchor + begin * 1000) / 1000);
+  }
+  return null;
+}
+
+/* 此刻这一次是不是被叫停了。秒级比较：波动是浮点，两端各自算出来的落点小数位
+   未必相同，而两次真实执行之间至少隔一个周期，一秒的余量撞不上。 */
+function isPausedNow(s, now = new Date()) {
+  const at = currentTakeAt(s, now);
+  return at != null && (s.pausedTake > 0) && Math.abs(s.pausedTake - at) < 1;
 }
 
 /* 每一次的起点（相对当天锚点的秒数）。liveTake 和「下次什么时候」都从这里来，
@@ -1050,6 +1073,8 @@ function ruleBadge(s, f, p) {
     if (on < 120) return [`等待出声 · ${fmt(on)}`, ''];
     return [`播 ${Math.round(on / 60)} 分没出过声`, 'bad'];
   }
+  // 用户自己按停的，不是故障。摆在「到点了没在播」前面，否则会拿红字骂人。
+  if (inWindow && isPausedNow(s)) return ['已停这一次 · 可继续', ''];
   // 到点了却没有任何执行——以前完全看不见的那种失败：Mac 退了、睡着了、
   // 或者素材文件被挪走，8 点照样悄无声息地过去。
   if (inWindow && reportsRuns(p)) {
@@ -1147,6 +1172,14 @@ function renderRules() {
         ).join('')}</div>`;
 
     const [btext, bkind] = s.enabled ? ruleBadge(s, f, p) : ['已停用', ''];
+    // 「停这一次」只在这一次真的在窗内时出现：它作用于一个具体的时刻，
+    // 窗外按下去没有对象。停用是「以后都别响」，两件事，两个按钮。
+    const takeAt = s.enabled && canPause(p) ? currentTakeAt(s) : null;
+    const paused = takeAt != null && isPausedNow(s);
+    const pauseBtn = takeAt == null ? ''
+      : paused
+        ? '<button class="mini acc" data-a="p" title="从此刻该在的位置接着播，不是从头开始">继续</button>'
+        : '<button class="mini" data-a="p" title="只停这一次，下一次和明天都照常">停这一次</button>';
     const [htext, hkind] = lastRunLine(s.id);
     const history = runsOf(s.id);
     const opened = S.openHist === s.id;
@@ -1173,8 +1206,9 @@ function renderRules() {
              + `<span class="what ${kind}">${esc(txt)}</span></div>`;
       }).join('')}</div>` : ''}
       <div style="display:flex;gap:8px;margin-top:12px">
+        ${pauseBtn}
         <button class="mini" data-a="e">修改</button>
-        <button class="mini" data-a="t">${s.enabled ? '停用' : '启用'}</button>
+        <button class="mini" data-a="t" title="${s.enabled ? '这条规则以后都不响了，包括正在播的这次' : '恢复这条规则'}">${s.enabled ? '停用' : '启用'}</button>
         <button class="mini" data-a="d">删除</button>
         <span class="grow"></span>
         <span class="cap" style="align-self:center;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(ruleItems(s))}</span>
@@ -1184,6 +1218,11 @@ function renderRules() {
       renderRules();
     };
     el.querySelector('[data-a=e]').onclick = () => openSheet(s);
+    if (takeAt != null) {
+      el.querySelector('[data-a=p]').onclick = () =>
+        api(`/api/collections/ss_schedules/records/${s.id}`, { method: 'PATCH',
+            body: JSON.stringify({ pausedTake: paused ? 0 : takeAt }) }).then(loadScheds);
+    }
     el.querySelector('[data-a=t]').onclick = () =>
       api(`/api/collections/ss_schedules/records/${s.id}`,
           { method: 'PATCH', body: JSON.stringify({ enabled: !s.enabled }) }).then(loadScheds);
