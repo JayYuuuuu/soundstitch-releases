@@ -539,6 +539,8 @@ const canManage = p => p && atLeast(p.appVersion, '0.13.0');
 const reportsRuns = p => p && atLeast(p.appVersion, '0.18.0');
 // 「停这一次」靠 Mac 认得 pausedTake。老版本会照播不误，给了按钮等于给个假开关。
 const canPause = p => p && atLeast(p.appVersion, '0.21.0');
+// 播完后再按播放，Mac 自己会先回到开头——0.22.0 才有。老版本见 #bPlay。
+const rewindsAtEnd = p => p && atLeast(p.appVersion, '0.22.0');
 
 /* 五格电平条：数字读不出「大概多响」，格子可以 */
 const meter = lv => {
@@ -685,6 +687,10 @@ async function loadPlayers() {
 /* 心跳新鲜度才是「在线」的依据：掉线的机器不会有人来改 online 字段 */
 const isLive = p => !!p && p.online && (Date.now() - new Date(p.lastSeen || 0).getTime() < 60000);
 const current = () => S.players.find(p => p.id === S.sel);
+// 停在结尾 ≠ 暂停：进度条满格却写着「已暂停」，按下播放又什么都不发生（见 #bPlay）。
+// 半秒余量——AAC 最后一帧不会正好落在报上来的时长上。
+const ended = p => !!p && p.state === 'paused' && (p.duration || 0) > 0
+  && (p.position || 0) >= p.duration - 0.5;
 // 机器名是 macOS 报上来的，通常又长又带「XXX 的」；截短只是为了塞进胶囊。
 const shortName = n => (String(n || 'Mac').replace(/^虞杰的\s*/, '').split(/\s+/)[0] || 'Mac');
 // 用户自己起的名字原样显示——截断是给机器名做的补救，不该用在人写的字上。
@@ -822,7 +828,7 @@ function renderNow() {
     if (!reportsAudio(p)) setBadge('播放中', 'ok');       // 这台 Mac 太旧，测不了
     else setBadge(...soundVerdict(p));
   }
-  else setBadge('已暂停', '');
+  else setBadge(ended(p) ? '已播完' : '已暂停', '');
 }
 
 /* 「现在有没有声音」是个错问题。
@@ -994,7 +1000,15 @@ const play = it => { S.selItem = it.id; renderItems();
 $('#bPlay').onclick = () => {
   const p = current();
   if (p && p.state === 'playing') return cmd('pause');
-  if (p && p.currentItem) return cmd('play');
+  if (p && p.currentItem) {
+    // 🔴 播完之后光发一条不带路径的 play 是没用的：停在末尾的 AVPlayer 对
+    // `play()` 毫无反应（实测 rate 仍是 0、位置不动），回执却照样是 done ——
+    // 症状就是「点了播放，进度条一直是播完的样子」。0.22.0 起 Mac 端会自己
+    // 先回到开头；老版本靠带上路径重新装载，同样从头播。
+    const again = ended(p) && !rewindsAtEnd(p)
+      && S.items.find(i => i.id === p.currentItem);
+    return again ? play(again) : cmd('play');
+  }
   const it = S.items.find(i => i.id === S.selItem) || S.items[0];
   if (it) play(it);
 };
