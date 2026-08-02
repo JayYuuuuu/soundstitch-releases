@@ -405,7 +405,7 @@ nav svg{width:22px;height:22px;fill:currentColor}
   <div class="fcard" id="grpTake">
     <div class="frow"><span class="flabel">每次时长</span>
       <div class="stepper"><button data-s="play" data-d="-1">−</button><span id="vPlay" class="num">30 s</span><button data-s="play" data-d="1">＋</button></div></div>
-    <div class="frow"><span class="flabel">重复次数</span>
+    <div class="frow" id="rowRep"><span class="flabel">重复次数</span>
       <div class="stepper"><button data-s="rep" data-d="-1">−</button><span id="vRep" class="num">3 次</span><button data-s="rep" data-d="1">＋</button></div></div>
     <div class="frow"><span class="flabel">每隔</span>
       <div class="stepper"><button data-s="period" data-d="-1">−</button><span id="vGap" class="num">2 分</span><button data-s="period" data-d="1">＋</button></div></div>
@@ -580,6 +580,9 @@ const reportsRuns = p => p && atLeast(p.appVersion, '0.18.0');
 const canPause = p => p && atLeast(p.appVersion, '0.21.0');
 // 播完后再按播放，Mac 自己会先回到开头——0.22.0 才有。老版本见 #bPlay。
 const rewindsAtEnd = p => p && atLeast(p.appVersion, '0.22.0');
+// 时段内按「每隔 N 播一次」分次播是 0.23.0 才有的：老版本收到同一条规则会
+// 整段循环到结束时间——比设定的吵得多。所以老机器上这几栏干脆不给。
+const splitsWindow = p => p && atLeast(p.appVersion, '0.23.0');
 
 /* 五格电平条：数字读不出「大概多响」，格子可以 */
 const meter = lv => {
@@ -608,16 +611,20 @@ const cnTime = v => {
  * nextFire 只回答「下一次什么时候」，而 daily 规则正在响的那半小时里它照样报明天：
  * 于是规则卡在真正执行的时候反而什么状态都不说。两边各算一次是重复，但把它挪到
  * 服务端就等于让「现在响不响」依赖一次网络往返——Mac 才是权威，这里是它的镜子。 */
+/* 这一次什么时候停：本身放满，或者时段到点——以先到的为准。 */
+const stopAt = (sl, begin) => Math.min(begin + sl.length, sl.until ?? Infinity);
+
 function liveTake(s, now = new Date()) {
   const slots = takeSlots(s, now);
   if (!slots) return null;
   const t = (now.getTime() - slots.anchor) / 1000;
   for (let i = 0; i < slots.at.length; i++) {
     const begin = slots.at[i];
-    if (t >= begin && t < begin + slots.length) return { elapsed: t - begin, take: i };
+    if (t >= begin && t < stopAt(slots, begin)) return { elapsed: t - begin, take: i };
   }
   return null;
 }
+
 
 /* 此刻名义上该响的那一次的起点，epoch 秒；不在窗内返回 null。
  *
@@ -628,7 +635,7 @@ function currentTakeAt(s, now = new Date()) {
   if (!sl) return null;
   const t = (now.getTime() - sl.anchor) / 1000;
   for (const begin of sl.at) {
-    if (t >= begin && t < begin + sl.length) return Math.round((sl.anchor + begin * 1000) / 1000);
+    if (t >= begin && t < stopAt(sl, begin)) return Math.round((sl.anchor + begin * 1000) / 1000);
   }
   return null;
 }
@@ -652,19 +659,41 @@ function takeSlots(s, now = new Date()) {
   // 东八区没有夏令时，偏移是常数，所以锚点可以直接算出来
   const anchor = Date.parse(p.date + 'T00:00:00+08:00') + start * 60000;
 
+  const length = s.playSeconds > 0 ? s.playSeconds : 0;
+  const cycle = length + Math.max(0, s.gapSeconds || 0);
+
   if (s.mode === 'window') {
     const end = hhmm(s.endTime);
     // 跨午夜的窗口 Mac 端就不支持（要求 end > start），这里跟着它，别自作主张
     if (end == null || end <= start) return null;
-    return { anchor, day: p.date, length: (end - start) * 60, at: [0] };
+    const span = (end - start) * 60;
+    // 不设每次时长 = 老行为：整段循环到结束时间
+    if (!length) return { anchor, day: p.date, length: span, at: [0], until: span };
+    // 设了就是「时段内每隔 N 播一次」：和 daily 同一套排布，次数由时段长度定，
+    // 只多一条——波动不许把一次推出它自己的时段（Mac 端同样 clamp，见 take(at:)）。
+    const slots = Math.min(20000, Math.max(1, Math.floor((span - length) / cycle) + 1));
+    const at = [];
+    const last = Math.max(0, span - length);
+    for (let i = 0; i < slots; i++)
+      at.push(Math.min(Math.max(i * cycle + wander(s, i, p.date), 0), last));
+    // 时段结束就是硬上界：一次没播完也到此为止（Mac 端那条 `now < end` 守卫）。
+    // 时段比一次还短时，两端全靠它才对得上。
+    return { anchor, day: p.date, length, at, until: span };
   }
   const takes = Math.max(1, s.repeatCount || 1);
-  const length = s.playSeconds > 0 ? s.playSeconds : 0;
   if (!length) return { anchor, day: p.date, length: 3600, at: [0] };  // 不限长：放完为止
-  const cycle = length + Math.max(0, s.gapSeconds || 0);
   const at = [];
   for (let i = 0; i < takes; i++) at.push(i * cycle + wander(s, i, p.date));
   return { anchor, day: p.date, length, at };
+}
+
+/* 时段内会响几次。取自 takeSlots 本身，不另算一遍——「结论行说 6 次、实际响 5 次」
+   这种事只会在两处各算一遍时发生。 */
+function windowRounds(s) {
+  // 星期清空：今天是不是它该响的日子，和「响起来是几次」没关系，
+  // 而带着星期算会在非执行日返回 0，让结论行说「约 0 次」。
+  const sl = takeSlots({ ...s, enabled: true, weekdays: [], localPath: s.localPath || '/x' });
+  return sl ? sl.at.length : 0;
 }
 
 /* 🔴 和 Mac 端 PlaybackSchedule.wander 必须逐位一致，否则控制端说 08:03、
@@ -1198,9 +1227,12 @@ function renderRules() {
                : s.mode === 'once' ? `${(s.date || '').slice(5)} ${s.startTime}` : s.startTime;
     const kind = s.mode === 'once' ? ' class="once"' : '';
 
+    // 时段内分次播（0.23.0 起）：它的落点和 daily 一样是一串，不再是一整条。
+    const split = s.mode === 'window' && (s.playSeconds || 0) > 0;
+
     // 24 小时缩略条：把「什么时候响」变成位置问题；跨午夜自动切两段
     let blocks = '';
-    if (s.mode === 'window') {
+    if (s.mode === 'window' && !split) {
       const end = hhmm(s.endTime) ?? start;
       blocks = end > start
         ? `<b${kind} style="left:${pct(start)}%;width:${pct(end - start)}%"></b>`
@@ -1216,10 +1248,12 @@ function renderRules() {
     }
 
     const period = (s.playSeconds || 0) + (s.gapSeconds || 0);
-    const badges = s.mode === 'window'
+    // 时段内响几次是算出来的，所以写「约」——波动会让最后一次落在时段外而少一次。
+    const times = split ? `约 ${windowRounds(s)}` : (s.repeatCount || 1);
+    const badges = s.mode === 'window' && !split
       ? '<span class="badge">持续</span>'
-      : `<span class="badge">${secs(s.playSeconds || 0)}</span><span class="badge">× ${s.repeatCount || 1}</span>`
-        + ((s.repeatCount || 1) > 1 ? `<span class="badge">每隔 ${secs(period)}</span>` : '')
+      : `<span class="badge">${secs(s.playSeconds || 0)}</span><span class="badge">× ${times}</span>`
+        + (split || (s.repeatCount || 1) > 1 ? `<span class="badge">每隔 ${secs(period)}</span>` : '')
         + (s.jitterSeconds ? `<span class="badge">± ${secs(s.jitterSeconds)}</span>` : '');
 
     const days = s.mode === 'once' ? ''
@@ -1298,7 +1332,7 @@ const F = { mode: 'daily', play: 30, rep: 3, period: 120, jitter: 0, days: [], p
 /* 秒数按档跳，不弹键盘也不用滑块（3e）。每一栏的量级差得很远，共用一张表
  * 会让「每隔」从 10 分一步跳到 30 分，也让「波动」一路能拨到几小时。 */
 const STEPS = {
-  play:   [5, 10, 15, 30, 60, 120, 300, 600, 1800, 3600],
+  play:   [0, 5, 10, 15, 30, 60, 120, 300, 600, 1800, 3600],   // 0 = 不限
   period: [30, 60, 120, 300, 600, 900, 1800, 2700, 3600, 5400, 7200, 10800, 21600, 43200],
   jitter: [0, 15, 30, 60, 120, 300, 600, 900, 1800],
 };
@@ -1363,7 +1397,9 @@ function openSheet(rule) {
 
   if (rule) {
     F.mode = rule.mode || 'daily';
-    F.play = rule.playSeconds || 30;
+    // 存的是多少就填多少：|| 30 会把「不限（0）」悄悄改成 30 秒，
+    // 用户只是打开看一眼再保存，规则就变了。
+    F.play = Number(rule.playSeconds) || 0;
     F.rep = rule.repeatCount || 1;
     // 存的是「上次结束→下次开始」，表单问的是「开始→开始」，在这里换回去
     F.period = (rule.playSeconds || 0) + (rule.gapSeconds || 0);
@@ -1447,12 +1483,19 @@ $('#dayPick').onclick = e => {
 
 /* 不适用的字段整组消失，而不是灰着占位（3e） */
 function syncSheet() {
+  const win = F.mode === 'window';
+  // 时段模式在 0.23.0 之前只有「整段循环」一种，那些机器上给出这几栏
+  // 等于给个假开关：它们收到 playSeconds 也照样循环整段。
+  const split = win && splitsWindow(current());
   $('#rowDate').classList.toggle('hide', F.mode !== 'once');
-  $('#rowEnd').classList.toggle('hide', F.mode !== 'window');
-  $('#grpTake').classList.toggle('hide', F.mode === 'window');
+  $('#rowEnd').classList.toggle('hide', !win);
+  $('#grpTake').classList.toggle('hide', win && !split);
+  // 时段内响几次是从时段长度算出来的，不是填的——留着它就成了一个填了不算数的框。
+  $('#rowRep').classList.toggle('hide', win);
   $('#grpDays').classList.toggle('hide', F.mode === 'once');
-  $('#labStart').textContent = F.mode === 'window' ? '开始' : '时间';
-  $('#vPlay').textContent = secs(F.play);
+  $('#labStart').textContent = win ? '开始' : '时间';
+  // 步进器读数只有 64px：说清楚「不限」就够，是循环还是放完由下面那行结论说。
+  $('#vPlay').textContent = F.play ? secs(F.play) : '不限';
   $('#vRep').textContent = F.rep + ' 次';
   $('#vGap').textContent = secs(F.period);
   $('#vJit').textContent = F.jitter ? '± ' + secs(F.jitter) : '不波动';
@@ -1460,19 +1503,26 @@ function syncSheet() {
 
   // 底部实时结论：保存前就能确认，代替所有说明文字。
   // 用一条和保存时一模一样的规则去算，否则预告和实际会各说各话。
-  const f = nextFire(draftRule());
-  const how = F.mode === 'window' ? '持续到结束时间'
-            : `${secs(F.play)} × ${F.rep} 次` + (F.rep > 1 ? ` · 每隔 ${secs(F.period)}` : '')
-              + (F.jitter ? ` · 前后 ±${secs(F.jitter)} 随机` : '');
+  const draft = draftRule();
+  const f = nextFire(draft);
+  const jit = F.jitter ? ` · 前后 ±${secs(F.jitter)} 随机` : '';
+  // 时段内分次播时，响几次是算出来的——这正是用户没法自己心算的那个数。
+  const rounds = win && F.play > 0 ? windowRounds(draft) : 0;
+  const how = win
+    ? (F.play > 0 ? `${secs(F.play)} × 约 ${rounds} 次 · 每隔 ${secs(F.period)}${jit}`
+                  : '持续到结束时间')
+    : F.play > 0
+      ? `${secs(F.play)} × ${F.rep} 次` + (F.rep > 1 ? ` · 每隔 ${secs(F.period)}` : '') + jit
+      : `一次放完${jit}`;
   // 一行结论：什么时候响、放什么、放不放得完。够不够放是这里唯一值得算的事——
   // 差额靠循环补上，用户不该自己去做这道减法。
   const chosen = pickedItems();
   const total = chosen.reduce((a, i) => a + (i.duration || 0), 0);
   const names = chosen.map(i => i.name).join(' → ') || '未选内容';
-  const fit = F.mode === 'window' ? '循环到时段结束'
-            : !total ? ''
+  const fit = !total ? ''
+            : !F.play ? (win ? '循环到时段结束' : `共 ${fmt(total)}，放完为止`)
             : F.play > total ? `共 ${fmt(total)}，不够 ${fmt(F.play)}，会循环滚动`
-            : `共 ${fmt(total)}，到 ${fmt(F.play)} 就停`;
+            : `共 ${fmt(total)}，每次到 ${fmt(F.play)} 就停`;
   // 改一条正在播的规则会当场重来（Mac 每 0.5 s 按新规则重算落点），不是等这次放完。
   // 这是唯一一个「按下保存会立刻发出声音变化」的情况，所以它自己一行、红字。
   const nowLive = F.editing && S.scheds.some(x => x.id === F.editing && liveTake(x));
@@ -1481,8 +1531,11 @@ function syncSheet() {
     : '';
   const lost = F.dropped > 0
     ? `<br><span style="font-size:12px;color:var(--badText)">原有 ${F.dropped} 段已不在可播清单里，已去掉</span>` : '';
+  // 正在响的时候不能再套「首次将在…响」的壳子，那读出来是「正在响 响」。
+  const lead = f && f.live ? '' : (F.editing ? '下次将在 ' : '首次将在 ');
+  const tail = f && f.live ? '' : ' 响';
   $('#verdict').innerHTML = f
-    ? `${F.editing ? '下次将在' : '首次将在'} <b>${esc(sayWhen(f))}</b> 响 · ${esc(how)}<br>
+    ? `${lead}<b>${esc(sayWhen(f))}</b>${tail} · ${esc(how)}<br>
        <span style="font-size:12px;color:var(--t3)">${esc(names)}${fit ? ' · ' + esc(fit) : ''}</span>${warn}${lost}`
     : '<b>不会触发</b> · 检查日期或星期' + lost;
 }
