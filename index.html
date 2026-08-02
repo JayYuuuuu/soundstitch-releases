@@ -411,6 +411,8 @@ nav svg{width:22px;height:22px;fill:currentColor}
       <div class="stepper"><button data-s="period" data-d="-1">−</button><span id="vGap" class="num">2 分</span><button data-s="period" data-d="1">＋</button></div></div>
     <div class="frow"><span class="flabel">随机波动</span>
       <div class="stepper"><button data-s="jitter" data-d="-1">−</button><span id="vJit" class="num">不波动</span><button data-s="jitter" data-d="1">＋</button></div></div>
+    <div class="frow" id="rowCont"><span class="flabel">每次内容</span>
+      <button id="fCont" class="mini" title="从头：每次都放开头那一段。接着往下：每次接着上次停下的地方，整条放完再回到开头">从头</button></div>
   </div>
 
   <div class="fcard" id="grpDays" style="padding:8px 12px">
@@ -583,6 +585,8 @@ const rewindsAtEnd = p => p && atLeast(p.appVersion, '0.22.0');
 // 时段内按「每隔 N 播一次」分次播是 0.23.0 才有的：老版本收到同一条规则会
 // 整段循环到结束时间——比设定的吵得多。所以老机器上这几栏干脆不给。
 const splitsWindow = p => p && atLeast(p.appVersion, '0.23.0');
+// 「接着上次往下」是 0.24.0 才有的：老版本每次都从头播，开关在它们身上是假的。
+const canContinue = p => p && atLeast(p.appVersion, '0.24.0');
 
 /* 五格电平条：数字读不出「大概多响」，格子可以 */
 const meter = lv => {
@@ -686,6 +690,37 @@ function takeSlots(s, now = new Date()) {
   for (let i = 0; i < takes; i++) at.push(i * cycle + wander(s, i, p.date));
   return { anchor, day: p.date, length, at };
 }
+
+/* 「今天之前这条规则已经跑过几天」——Mac 端 runDays 的孪生，逐日走同一套判断。
+   规则不执行的星期不算：一条周一三五的规则活了一个月，是跑了十来次，不是三十次，
+   按日历天算会把录音里五分之四的内容跳过去。 */
+function runDays(s, now = new Date()) {
+  if (!s.continuous || !s.created) return 0;
+  const from = cnParts(pbDate(s.created)).date;
+  const today = cnParts(now).date;
+  let n = 0, t = Date.parse(from + 'T12:00:00+08:00');   // 正午做代表，东八区没有夏令时
+  for (let i = 0; i < 3650; i++) {
+    const p = cnParts(new Date(t));
+    if (p.date >= today) break;
+    if (!s.weekdays || !s.weekdays.length || s.weekdays.includes(p.weekday)) n++;
+    t += 86400000;
+  }
+  return n;
+}
+
+/* 第 index 次开始前，这条规则已经播掉多少秒。Mac 端 consumed(takeIndex:…) 的孪生。 */
+function consumedAt(s, index, now = new Date()) {
+  const length = s.playSeconds > 0 ? s.playSeconds : 0;
+  if (!s.continuous || !length) return 0;
+  const sl = takeSlots({ ...s, enabled: true, weekdays: [], localPath: s.localPath || '/x' }, now);
+  const perDay = Math.max(1, s.mode === 'window' ? (sl ? sl.at.length : 1) : (s.repeatCount || 1));
+  return (runDays(s, now) * perDay + index) * length;
+}
+
+/* ss_schedules 上有没有 continuous 字段。PocketBase 返回记录时会带上 schema 里的
+   每一个字段，所以有一条规则就看得出来；一条都没有时先当它有（新建保存一次之后
+   就知道了）。 */
+const contFieldReady = () => !S.scheds.length || S.scheds.some(x => 'continuous' in x);
 
 /* 时段内会响几次。取自 takeSlots 本身，不另算一遍——「结论行说 6 次、实际响 5 次」
    这种事只会在两处各算一遍时发生。 */
@@ -1254,7 +1289,8 @@ function renderRules() {
       ? '<span class="badge">持续</span>'
       : `<span class="badge">${secs(s.playSeconds || 0)}</span><span class="badge">× ${times}</span>`
         + (split || (s.repeatCount || 1) > 1 ? `<span class="badge">每隔 ${secs(period)}</span>` : '')
-        + (s.jitterSeconds ? `<span class="badge">± ${secs(s.jitterSeconds)}</span>` : '');
+        + (s.jitterSeconds ? `<span class="badge">± ${secs(s.jitterSeconds)}</span>` : '')
+        + (s.continuous ? '<span class="badge">接着往下</span>' : '');
 
     const days = s.mode === 'once' ? ''
       : `<div class="days">${DAYS.map((d, i) =>
@@ -1327,8 +1363,8 @@ function renderRules() {
  * 存进去的 gapSeconds 仍是后者（Mac 端的语义没变），保存时换算。
  * 以前这一栏叫「间隔」，填 1 小时实际周期是 1 小时零 30 秒——「每隔 1 小时」
  * 是用户说的话，就该是用户填的数。 */
-const F = { mode: 'daily', play: 30, rep: 3, period: 120, jitter: 0, days: [], pick: [],
-            editing: null, dropped: 0 };
+const F = { mode: 'daily', play: 30, rep: 3, period: 120, jitter: 0, cont: false,
+            days: [], pick: [], editing: null, dropped: 0 };
 /* 秒数按档跳，不弹键盘也不用滑块（3e）。每一栏的量级差得很远，共用一张表
  * 会让「每隔」从 10 分一步跳到 30 分，也让「波动」一路能拨到几小时。 */
 const STEPS = {
@@ -1404,6 +1440,7 @@ function openSheet(rule) {
     // 存的是「上次结束→下次开始」，表单问的是「开始→开始」，在这里换回去
     F.period = (rule.playSeconds || 0) + (rule.gapSeconds || 0);
     F.jitter = rule.jitterSeconds || 0;
+    F.cont = !!rule.continuous;
     F.days = [...(rule.weekdays || [])];
     // 素材可能已经被移除了：留着一个指向不存在条目的勾，保存时会写出一条播不响
     // 的规则。滤掉，并在结论行里说这件事。
@@ -1416,7 +1453,7 @@ function openSheet(rule) {
     $('#fEnd').value = rule.endTime || '23:00';
   } else {
     F.mode = 'daily'; F.play = 30; F.rep = 3; F.period = 120; F.jitter = 0;
-    F.days = []; F.dropped = 0;
+    F.cont = false; F.days = []; F.dropped = 0;
     $('#fDate').value = cnParts(new Date()).date;
     // 开局带上「现在」页选中的那一段，保留原来的顺手，但现在它是看得见的。
     F.pick = S.selItem && S.items.some(i => i.id === S.selItem) ? [S.selItem] : [];
@@ -1473,6 +1510,8 @@ document.querySelectorAll('.stepper button').forEach(b => b.onclick = () => {
   syncSheet();
 });
 
+$('#fCont').onclick = () => { F.cont = !F.cont; syncSheet(); };
+
 $('#dayPick').innerHTML = DAYS.map((d, i) => `<button data-d="${i + 1}"><i>${d}</i></button>`).join('');
 $('#dayPick').onclick = e => {
   const b = e.target.closest('button'); if (!b) return;
@@ -1499,6 +1538,13 @@ function syncSheet() {
   $('#vRep').textContent = F.rep + ' 次';
   $('#vGap').textContent = secs(F.period);
   $('#vJit').textContent = F.jitter ? '± ' + secs(F.jitter) : '不波动';
+  // 每次都整条放完的话，「接着上次」没有对象——这一栏只在限了时长时才成立。
+  // 还要服务端真的有这个字段：PocketBase 会**静默丢掉** schema 之外的字段，
+  // 少加一个字段就变成一个按了没反应的开关，而两边都不报错。
+  const canCont = F.play > 0 && canContinue(current()) && contFieldReady();
+  $('#rowCont').classList.toggle('hide', !canCont);
+  $('#fCont').textContent = F.cont ? '接着往下' : '从头';
+  $('#fCont').classList.toggle('acc', F.cont);
   [...$('#dayPick').children].forEach(b => b.classList.toggle('on', F.days.includes(+b.dataset.d)));
 
   // 底部实时结论：保存前就能确认，代替所有说明文字。
@@ -1522,6 +1568,7 @@ function syncSheet() {
   const fit = !total ? ''
             : !F.play ? (win ? '循环到时段结束' : `共 ${fmt(total)}，放完为止`)
             : F.play > total ? `共 ${fmt(total)}，不够 ${fmt(F.play)}，会循环滚动`
+            : draft.continuous ? `共 ${fmt(total)}，今天从 ${fmt(consumedAt(draft, 0) % total)} 起往下`
             : `共 ${fmt(total)}，每次到 ${fmt(F.play)} 就停`;
   // 改一条正在播的规则会当场重来（Mac 每 0.5 s 按新规则重算落点），不是等这次放完。
   // 这是唯一一个「按下保存会立刻发出声音变化」的情况，所以它自己一行、红字。
@@ -1551,6 +1598,9 @@ function draftRule(id = F.editing || 'draft') {
     startTime: $('#fStart').value, endTime: $('#fEnd').value,
     weekdays: F.days, playSeconds: F.play, repeatCount: F.rep,
     gapSeconds: Math.max(0, F.period - F.play), jitterSeconds: F.jitter,
+    // created 决定「已经跑过几天」，预告时用现有规则的，新建的就是今天
+    continuous: F.cont && F.play > 0,
+    created: (S.scheds.find(x => x.id === F.editing) || {}).created || new Date().toISOString(),
   };
 }
 
@@ -1568,6 +1618,7 @@ $('#saveRule').onclick = async () => {
     mode: F.mode, date: $('#fDate').value,
     startTime: $('#fStart').value, endTime: $('#fEnd').value,
     weekdays: [...F.days].sort((a, b) => a - b),
+    continuous: F.cont && F.play > 0,
     // 存的仍是「上次结束到下次开始」——Mac 端语义没动，换算放在这一处
     playSeconds: F.play, repeatCount: F.rep,
     gapSeconds: Math.max(0, F.period - F.play), jitterSeconds: F.jitter,
