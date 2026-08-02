@@ -701,7 +701,10 @@ $('#doLogin').onclick = async () => {
     start();
   } catch (e) { $('#loginErr').textContent = String(e.message || e); }
 };
-$('#out').onclick = () => { localStorage.removeItem('ssToken'); location.reload(); };
+$('#out').onclick = () => {
+  // 退出等于换人：记住的那台机器也不该留给下一个账号。
+  localStorage.removeItem('ssToken'); localStorage.removeItem('ssSel'); location.reload();
+};
 
 /* ---------- 启动 ---------- */
 async function start() {
@@ -717,6 +720,10 @@ async function start() {
 async function loadPlayers() {
   const r = await api('/api/collections/ss_players/records?perPage=50&sort=-updated');
   S.players = r.items || [];
+  // 记住上次选的那台：两台机器时「列表第一台」有一半概率不是想控的那台，
+  // 而这不值得做成一个偏好设置——直接记住就行。存的 id 可能已经不在了
+  // （换了账号、机器被删），所以永远要在现有列表里核对一次再用。
+  if (!S.sel && S.players.some(p => p.id === localStorage.ssSel)) S.sel = localStorage.ssSel;
   if (!S.sel && S.players.length) S.sel = S.players[0].id;
   notePos(current());
   renderChips(); renderNow();
@@ -748,6 +755,7 @@ function renderChips() {
     b.onclick = async e => {
       if (e.target.classList.contains('cpen')) { openDevSheet(p); return; }
       S.sel = p.id; S.selItem = null; S.cmd = 'idle';
+      localStorage.ssSel = p.id;
       notePos(current());
       renderChips(); renderNow(); await loadItems(); await loadScheds();
     };
