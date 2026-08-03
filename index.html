@@ -519,12 +519,19 @@ function nextSlotToday(s, now) {
   return null;
 }
 
-/* 未来某一天的第一次。波动的种子里有日期，所以要按那天算，不是按今天。 */
+/* 未来某一天的第一次。波动的种子里有日期，所以要按那天算，不是按今天。
+ *
+ * 🔴 取那天自己的 takeSlots[0]，不是「起始时刻 + wander」——时段模式的第一次
+ * 同样会被波动推开（而且还要 clamp 回时段内），以前这里对 window 直接返回裸
+ * 起始时刻，于是网页说「明天 01:00」而 Mac 端 01:04 才响。同一份落点算两遍
+ * 就是这么分家的：liveTake 和 nextSlotToday 早就走 takeSlots 了，只有它没走。 */
 function firstSlotOn(s, day) {
   const start = hhmm(s.startTime);
   if (start == null) return start;
-  if (s.mode === 'window' || !(s.playSeconds > 0)) return start;
-  return Math.round(start + wander(s, 0, day) / 60);
+  const midnight = Date.parse(day + 'T00:00:00+08:00');
+  const sl = takeSlots(s, new Date(midnight + 43200000));   // 那天正午，落在同一天里
+  if (!sl || !sl.at.length) return start;
+  return Math.round((sl.anchor + sl.at[0] * 1000 - midnight) / 60000);
 }
 
 /* 「下一次什么时候响」—— 用户唯一真正要的答案，所以它是每条规则的主结论 */
