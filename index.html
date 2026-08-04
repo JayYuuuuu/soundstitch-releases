@@ -789,8 +789,13 @@ async function start() {
 }
 
 async function loadPlayers() {
-  const r = await api('/api/collections/ss_players/records?perPage=50&sort=-updated');
-  S.players = r.items || [];
+  // 🔴 别按 updated 排：那是**心跳时间**，每 5–15 秒动一次，于是设备胶囊的顺序
+  // 一直在自己换位置——正要点的那一枚会在手指底下跑掉。设备是长期存在的东西，
+  // 顺序就该是固定的，按显示名排（Mac 端那份也是这么排的，两边看到同一个顺序）。
+  const r = await api('/api/collections/ss_players/records?perPage=50&sort=created');
+  S.players = (r.items || []).sort((a, b) =>
+    deviceName(a).localeCompare(deviceName(b), 'zh-Hans-CN', { numeric: true })
+    || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   // 记住上次选的那台：两台机器时「列表第一台」有一半概率不是想控的那台，
   // 而这不值得做成一个偏好设置——直接记住就行。存的 id 可能已经不在了
   // （换了账号、机器被删），所以永远要在现有列表里核对一次再用。
