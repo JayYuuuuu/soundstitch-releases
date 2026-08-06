@@ -387,7 +387,7 @@ nav svg{width:22px;height:22px;fill:currentColor}
     <nav>
       <button id="navNow" class="sel"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>现在</button>
       <button id="navSched"><svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 100 20 10 10 0 000-20zm1 10.6V6h-2v7.4l5.5 3.3 1-1.7-4.5-2.4z"/></svg>定时</button>
-      <button id="navLog"><svg viewBox="0 0 24 24"><path d="M4 5.4h2.2v2.2H4zM8.6 5.4H20v2.2H8.6zM4 10.9h2.2v2.2H4zM8.6 10.9H20v2.2H8.6zM4 16.4h2.2v2.2H4zM8.6 16.4H20v2.2H8.6z"/></svg>日志</button>
+      <button id="navLog" title="定时到点响了没、放了什么、响了几次。手动点播不记在这里——那时你人就在跟前，出没出声当场就知道"><svg viewBox="0 0 24 24"><path d="M4 5.4h2.2v2.2H4zM8.6 5.4H20v2.2H8.6zM4 10.9h2.2v2.2H4zM8.6 10.9H20v2.2H8.6zM4 16.4h2.2v2.2H4zM8.6 16.4H20v2.2H8.6z"/></svg>定时日志</button>
     </nav>
   </div>
 </div>
@@ -1181,7 +1181,10 @@ const setTab = t => {
   $('#navNow').classList.toggle('sel', t === 'now');
   $('#navSched').classList.toggle('sel', t === 'sched');
   $('#navLog').classList.toggle('sel', t === 'log');
-  $('#title').textContent = t === 'now' ? '现在' : t === 'sched' ? '定时' : '日志';
+  // 「日志」不够：这里只有定时的执行记录，手动点播一条都不写（写入口全挂在
+  // 调度那圈 tick 上）。标题不点明就会被当成全部播放历史，查不到手动那次时
+  // 读起来像丢了记录。
+  $('#title').textContent = t === 'now' ? '现在' : t === 'sched' ? '定时' : '定时日志';
   // 切过来就补读一次执行历史：在「现在」页时收到的 ss_runs 事件是不重读的，
   // 否则每次定时开播都要把这一页也刷一遍。
   if (t !== 'now' && S.sel) loadScheds().catch(() => {});
@@ -1481,7 +1484,7 @@ function renderLog() {
     box.innerHTML = `<div class="card"><div class="empty">${
       p && !reportsRuns(p)
         ? '这台 Mac 的声拼太旧，不写执行日志<br>在 Mac 上「检查更新」升级到 0.18.0 以上'
-        : '还没有定时执行记录<br>定时响过之后，这里能查到几点放了什么、响了几次'}</div></div>`;
+        : '还没有定时执行记录<br><span title="定时是唯一没人在场的功能，所以才要记账；手动点播时你就在跟前">只记定时，手动点播不记录</span>'}</div></div>`;
     return;
   }
 
