@@ -163,6 +163,20 @@ input[type=range]{width:100%;accent-color:var(--accent);height:44px}
 .runs .what{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .runs .bad{color:var(--badText)}
 
+/* 日志页：一天一张卡、一次执行一行——「几点放了什么、响了几次」的查账入口。
+   行上只有一行结论；是哪条规则、失败原因这类解释进 title。 */
+.lday{display:flex;font-size:11px;font-weight:600;color:var(--t3);margin-bottom:4px}
+.lrow{display:flex;align-items:baseline;gap:10px;padding:8px 0;font-size:13.5px}
+.lrow+.lrow{border-top:.5px solid var(--line)}
+.ltime{flex:none;width:42px;color:var(--t2);font-weight:600}
+.lname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lres{flex:none;font-size:12px;color:var(--t3)}
+.lres.ok{color:var(--okText)}
+.lres.bad{color:var(--badText)}
+.lres.acc{color:var(--accText)}
+/* 规则筛选条复用设备胶囊的样子；main 自带左右 16px，别再叠一层 */
+#logRules{padding:0 0 12px}
+
 /* Tab 条钉在底部，桌面也一样——只是密度收一档。
    以前桌面把它搬到顶部当分段控件，于是同一个切换器在两种环境里长在两个地方，
    而这是全局导航，位置本身就是记忆点。 */
@@ -281,6 +295,7 @@ nav svg{width:22px;height:22px;fill:currentColor}
   .rule{border-radius:12px;padding:12px 14px;margin-bottom:10px}
   .rtime{font-size:17px}
   .strip{height:13px}
+  .lrow{padding:6px 0;font-size:13px}
   .sheet{max-width:520px;border-radius:14px;bottom:auto;top:50%;left:50%;right:auto;
          transform:translate(-50%,-46%) scale(.98);opacity:0;
          transition:transform .2s ease-out,opacity .2s ease-out;
@@ -364,9 +379,15 @@ nav svg{width:22px;height:22px;fill:currentColor}
       <button id="addRule" class="primary">新建定时</button>
     </main>
 
+    <main id="tabLog" class="hide">
+      <div id="logRules" class="chips hide"></div>
+      <div id="log"></div>
+    </main>
+
     <nav>
       <button id="navNow" class="sel"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>现在</button>
       <button id="navSched"><svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 100 20 10 10 0 000-20zm1 10.6V6h-2v7.4l5.5 3.3 1-1.7-4.5-2.4z"/></svg>定时</button>
+      <button id="navLog"><svg viewBox="0 0 24 24"><path d="M4 5.4h2.2v2.2H4zM8.6 5.4H20v2.2H8.6zM4 10.9h2.2v2.2H4zM8.6 10.9H20v2.2H8.6zM4 16.4h2.2v2.2H4zM8.6 16.4H20v2.2H8.6z"/></svg>日志</button>
     </nav>
   </div>
 </div>
@@ -464,6 +485,7 @@ const S = {
   url: localStorage.ssUrl || 'https://baihe.yujiev.com:54812',
   token: localStorage.ssToken || '',
   players: [], items: [], scheds: [], runs: [], openHist: null, sel: null, selItem: null,
+  logRule: '',
   tab: 'now', es: null, retries: 0, cmd: 'idle', failMsg: '',
   cmdTimer: null, failTimer: null,
   manageItem: null, armTimer: null,
@@ -831,6 +853,7 @@ function renderChips() {
     b.onclick = async e => {
       if (e.target.classList.contains('cpen')) { openDevSheet(p); return; }
       S.sel = p.id; S.selItem = null; S.cmd = 'idle';
+      S.logRule = '';                        // 日志筛选是按规则 id 记的，跨设备没有意义
       localStorage.ssSel = p.id;
       notePos(current());
       renderChips(); renderNow(); await loadItems(); await loadScheds();
@@ -1154,15 +1177,18 @@ const setTab = t => {
   S.tab = t;
   $('#tabNow').classList.toggle('hide', t !== 'now');
   $('#tabSched').classList.toggle('hide', t !== 'sched');
+  $('#tabLog').classList.toggle('hide', t !== 'log');
   $('#navNow').classList.toggle('sel', t === 'now');
   $('#navSched').classList.toggle('sel', t === 'sched');
-  $('#title').textContent = t === 'now' ? '现在' : '定时';
+  $('#navLog').classList.toggle('sel', t === 'log');
+  $('#title').textContent = t === 'now' ? '现在' : t === 'sched' ? '定时' : '日志';
   // 切过来就补读一次执行历史：在「现在」页时收到的 ss_runs 事件是不重读的，
   // 否则每次定时开播都要把这一页也刷一遍。
-  if (t === 'sched' && S.sel) loadScheds().catch(() => {});
+  if (t !== 'now' && S.sel) loadScheds().catch(() => {});
 };
 $('#navNow').onclick = () => setTab('now');
 $('#navSched').onclick = () => setTab('sched');
+$('#navLog').onclick = () => setTab('log');
 
 /* ---------- 定时 ---------- */
 async function loadScheds() {
@@ -1171,11 +1197,12 @@ async function loadScheds() {
   // 机器的」这种半新半旧的画面。
   const [r, h] = await Promise.all([
     api('/api/collections/ss_schedules/records?perPage=200&sort=startTime&filter=' + who),
-    api('/api/collections/ss_runs/records?perPage=150&sort=-created&filter=' + who)
+    // Mac 端每台只保留 200 行（写 start 时修剪），取满 200 就是全部日志
+    api('/api/collections/ss_runs/records?perPage=200&sort=-created&filter=' + who)
       .catch(() => ({ items: [] })),   // 老服务端没有这张表，规则本身照常显示
   ]);
   S.scheds = r.items || []; S.runs = h.items || [];
-  renderRules();
+  renderRules(); renderLog();
 }
 
 /* 这条规则的执行历史，新的在前 */
@@ -1247,6 +1274,10 @@ function runDetail(r) {
           + (r.note ? ` · ${r.note}` : ''), 'bad'];
 }
 
+/* 规则的一行名字：日志筛选条和规则卡标题共用，两处各写一份就会叫不一样 */
+const ruleHead = s => s.mode === 'window' ? `${s.startTime} → ${s.endTime}`
+                    : s.mode === 'once' ? `${(s.date || '').slice(5)} ${s.startTime}` : s.startTime;
+
 /* 规则行上说清楚会响哪几段：单段就是名字，多段是「甲 → 乙 +2」。
    完整清单进 title=，行上永远只有一行。 */
 function ruleItems(s) {
@@ -1270,8 +1301,7 @@ function renderRules() {
   for (const s of S.scheds) {
     const f = nextFire(s);
     const start = hhmm(s.startTime) ?? 0;
-    const head = s.mode === 'window' ? `${s.startTime} → ${s.endTime}`
-               : s.mode === 'once' ? `${(s.date || '').slice(5)} ${s.startTime}` : s.startTime;
+    const head = ruleHead(s);
     const kind = s.mode === 'once' ? ' class="once"' : '';
 
     // 时段内分次播（0.23.0 起）：它的落点和 daily 一样是一串，不再是一整条。
@@ -1368,6 +1398,121 @@ function renderRules() {
       api(`/api/collections/ss_schedules/records/${s.id}`, { method: 'DELETE' }).then(loadScheds);
     box.appendChild(el);
   }
+}
+
+/* ---------- 日志 ----------
+ *
+ * 「几点放了什么、响了几次」——事后查账的那一页。规则卡只答「这条规则最近怎么样」，
+ * 想按时间查就得挨条点开；这里把同一份 ss_runs 按天铺开，跨规则按时间排。
+ *
+ * 一次执行(take)配成一行：start 开、end/failed 收。missing 单独一行——
+ * 它是那种本来完全静默的失败（RunLog 里第一段就不在时连 start 都不开）。
+ * 这里只是配对与展示，怎么开合是 Mac 端 RunLog 状态机定的，别在这边另立判断。 */
+function takeRows() {
+  const open = {};                                   // schedule id → 还没收尾的 start 行
+  const out = [];
+  for (let i = S.runs.length - 1; i >= 0; i--) {     // S.runs 新的在前，倒着走成时间正序
+    const r = S.runs[i];
+    if (r.event === 'start') {
+      // 同一条规则又开了一次，上一次却没收尾 = App 中途被退掉/断电
+      if (open[r.schedule]) out.push({ at: pbDate(open[r.schedule].created).getTime(),
+                                       start: open[r.schedule], dead: true });
+      open[r.schedule] = r;
+    } else if (r.event === 'missing') {
+      out.push({ at: pbDate(r.created).getTime(), miss: r });
+    } else {                                         // end / failed：收掉开着的那次
+      const s = open[r.schedule]; delete open[r.schedule];
+      // start 被 200 行修剪掉时，从收尾行倒推开始时刻——playedFor 就是播了多久
+      out.push(s ? { at: pbDate(s.created).getTime(), start: s, end: r }
+                 : { at: pbDate(r.created).getTime() - (r.playedFor || 0) * 1000, end: r });
+    }
+  }
+  for (const id in open) out.push({ at: pbDate(open[id].created).getTime(), start: open[id] });
+  return out.sort((a, b) => b.at - a.at);
+}
+
+/* 一行的结论。名字取开始时那段；清单播到别段收尾就写成「甲 → 乙」。 */
+function logRow(t) {
+  if (t.miss) return { name: t.miss.itemName || '?', res: '文件不在，没响', kind: 'bad',
+                       tip: t.miss.localPath || '' };
+  if (t.end) {
+    const from = t.start ? t.start.itemName : t.end.itemName;
+    const name = t.start && t.end.itemName && t.end.itemName !== t.start.itemName
+      ? `${from} → ${t.end.itemName}` : from;
+    if (t.end.event === 'failed')
+      return { name, res: '播不出', kind: 'bad', tip: t.end.note || '' };
+    const n = t.end.soundCount || 0;
+    return { name, res: `${n > 0 ? `响 ${n} 次` : '一次没响'} · ${fmt(t.end.playedFor)}`,
+             kind: n > 0 ? 'ok' : 'bad', tip: '' };
+  }
+  // 只有 start：要么此刻正在播，要么那次执行没有善终
+  const sch = S.scheds.find(x => x.id === t.start.schedule);
+  const p = current();
+  if (!t.dead && sch && liveTake(sch) && p && isLive(p) && p.state === 'playing')
+    return { name: t.start.itemName, res: `正在播 · ${fmt((Date.now() - t.at) / 1000)}`,
+             kind: 'acc', tip: '' };
+  return { name: t.start.itemName, res: '没有结束记录', kind: '',
+           tip: '执行中 App 被退出或断电，就会缺结束行' };
+}
+
+function renderLog() {
+  const box = $('#log'), bar = $('#logRules'), p = current();
+
+  // 筛选条：只有一条规则时没有可查的维度，整条藏起来
+  const withRuns = S.scheds.filter(s => S.runs.some(r => r.schedule === s.id));
+  if (withRuns.length > 1) {
+    bar.classList.remove('hide');
+    bar.innerHTML = '';
+    const mk = (label, id, tip) => {
+      const b = document.createElement('button');
+      b.className = 'chip' + (S.logRule === id ? ' sel' : '');
+      b.textContent = label;
+      if (tip) b.title = tip;
+      b.onclick = () => { S.logRule = id; renderLog(); };
+      bar.appendChild(b);
+    };
+    mk('全部', '');
+    for (const s of withRuns) mk(ruleHead(s), s.id, ruleItems(s));
+  } else { bar.classList.add('hide'); S.logRule = ''; }
+
+  let rows = takeRows();
+  if (S.logRule) rows = rows.filter(t => (t.miss || t.start || t.end).schedule === S.logRule);
+  if (!rows.length) {
+    box.innerHTML = `<div class="card"><div class="empty">${
+      p && !reportsRuns(p)
+        ? '这台 Mac 的声拼太旧，不写执行日志<br>在 Mac 上「检查更新」升级到 0.18.0 以上'
+        : '还没有定时执行记录<br>定时响过之后，这里能查到几点放了什么、响了几次'}</div></div>`;
+    return;
+  }
+
+  // 按东八区的日子分组；行里只写钟点，是哪天由卡头说
+  const today = cnParts(new Date()).date;
+  const yday = cnParts(new Date(Date.now() - 86400000)).date;
+  const groups = [];
+  for (const t of rows) {
+    const cp = cnParts(new Date(t.at));
+    if (!groups.length || groups[groups.length - 1].date !== cp.date)
+      groups.push({ date: cp.date, wd: cp.weekday, rows: [] });
+    groups[groups.length - 1].rows.push({ ...t, min: cp.minutes });
+  }
+  box.innerHTML = groups.map(g => {
+    const label = g.date === today ? '今天' : g.date === yday ? '昨天'
+                : `${g.date.slice(5)} 周${DAYS[g.wd - 1]}`;
+    // 「次」数的是执行，不数 missing 那种附属行：一次执行途中跳过一段会写两行，
+    // 按行数就把同一次数成了两次。
+    const takes = g.rows.filter(t => t.start || t.end).length;
+    return `<div class="card"><div class="lday"><span>${esc(label)}</span>`
+      + `<span class="grow"></span><span class="num">${takes} 次</span></div>`
+      + g.rows.map(t => {
+          const r = logRow(t);
+          const sch = S.scheds.find(x => x.id === (t.miss || t.start || t.end).schedule);
+          const tip = [sch ? `规则 ${ruleHead(sch)}` : '', r.tip].filter(Boolean).join(' · ');
+          return `<div class="lrow" title="${esc(tip)}"><span class="ltime num">${clock(t.min)}</span>`
+            + `<span class="lname">${esc(r.name)}</span>`
+            + `<span class="lres ${r.kind}">${esc(r.res)}</span></div>`;
+        }).join('')
+      + '</div>';
+  }).join('');
 }
 
 /* ---------- 新建规则 ---------- */
@@ -1682,7 +1827,7 @@ function connectRealtime() {
   es.addEventListener('ss_schedules', () => { if (S.sel) loadScheds(); });
   // 一次定时开播 / 收尾就是一行——收到就重读，规则卡上的「正在播」和「上次响没响」
   // 才会在事情发生的那一刻变，而不是等到下一次 45 秒轮询。
-  es.addEventListener('ss_runs', () => { if (S.sel && S.tab === 'sched') loadScheds(); });
+  es.addEventListener('ss_runs', () => { if (S.sel && S.tab !== 'now') loadScheds(); });
   es.onerror = () => setLink(`重连中 · 第 ${++S.retries} 次`, 'bt');
 }
 function setLink(text, kind) {
@@ -1711,6 +1856,7 @@ setInterval(() => {
   if (++uiTick % 5 === 0) {
     renderChips();
     if (S.tab === 'sched') renderRules();
+    if (S.tab === 'log') renderLog();      // 「正在播 · 4:12」那行要跟着走
   }
 }, 1000);
 
