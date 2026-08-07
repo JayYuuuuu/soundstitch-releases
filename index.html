@@ -64,6 +64,9 @@ button{border:0;background:none;padding:0;cursor:pointer}
 /* 命中区补到 30px：铅笔本身只有十来像素，够看不够点 */
 .cpen{margin:-8px -6px -8px 2px;padding:8px 6px;font-size:13px;opacity:.75;line-height:1}
 .chip.off .cdot{background:#C7C7CC}
+/* 连接中：醒着但指令通道还没建起来。橙色，和「在线绿 / 离线灰」都分得开 */
+.chip.wake .cdot{background:var(--bt)}
+.chip.sel.wake .cdot{background:#FFD60A}
 /* 🔴 圆点只说明「在不在线」，选中与否由胶囊底色说。以前选中时把绿点刷成白色，
    等于用「选中」把「在线」这条信息覆盖掉——看起来正好像掉线了。绿色留着，
    加一圈白边解决绿点压在蓝底上的分离度问题。 */
@@ -828,8 +831,14 @@ async function loadPlayers() {
   if (S.sel) { await loadItems(); await loadScheds(); }
 }
 
-/* 心跳新鲜度才是「在线」的依据：掉线的机器不会有人来改 online 字段 */
+/* 心跳新鲜度才是「在线」的依据：掉线的机器不会有人来改 online 字段。
+   而 `online` 自 0.26.5 起只在**订阅成功后**才为真——它说的是「指令进得来」，
+   不是「进程活着」。两个条件都要。 */
 const isLive = p => !!p && p.online && (Date.now() - new Date(p.lastSeen || 0).getTime() < 60000);
+/* 心跳很新、但指令通道还没建起来：冷启动和睡醒后的那几秒就是这个状态。
+   🔴 以前这里和「离线」混作一谈，于是屏幕上写着「离线 · 心跳 0 分前」——自相矛盾，
+   而真正该说的是「再等一下」。老版本 Mac（<0.26.5）永远 online=true，不会走到这条。 */
+const isWaking = p => !!p && !p.online && (Date.now() - new Date(p.lastSeen || 0).getTime() < 60000);
 const current = () => S.players.find(p => p.id === S.sel);
 // 停在结尾 ≠ 暂停：进度条满格却写着「已暂停」，按下播放又什么都不发生（见 #bPlay）。
 // 半秒余量——AAC 最后一帧不会正好落在报上来的时长上。
@@ -845,7 +854,9 @@ function renderChips() {
   box.innerHTML = '';
   for (const p of S.players) {
     const b = document.createElement('button');
-    b.className = 'chip' + (p.id === S.sel ? ' sel' : '') + (isLive(p) ? '' : ' off');
+    // 连接中单独一档：灰点说「不在」，而它其实在，只是还收不了指令
+    b.className = 'chip' + (p.id === S.sel ? ' sel' : '')
+      + (isLive(p) ? '' : isWaking(p) ? ' wake' : ' off');
     // 改名的入口只长在选中的那一枚上：每一枚都挂个铅笔会把设备切换这件事
     // 淹掉，而改名总是先选中再改。
     b.innerHTML = `<span class="cdot"></span>${esc(deviceName(p))}`
@@ -961,7 +972,12 @@ function renderNow() {
   }
 
   // 设备离线优先于任何指令状态：原因要指向真问题，而不是报一个假的指令失败（3g）
-  if (!isLive(p)) {
+  if (isWaking(p)) {
+    // 机器醒着、正在建指令通道。说清楚是「还不能」而不是「坏了」——
+    // 这几秒里按播放曾经会收到红字「设备未回应」，而它什么毛病也没有。
+    setBadge('连接中 · 稍等', 'bt', true);
+  }
+  else if (!isLive(p)) {
     const mins = Math.round((Date.now() - new Date(p.lastSeen || 0).getTime()) / 60000);
     setBadge(isFinite(mins) && mins < 10000 ? `离线 · 心跳 ${mins} 分前` : '离线', '');
   }
@@ -1123,8 +1139,17 @@ function watch(id) {
     if (rec.status === 'done') { clearTimeout(S.cmdTimer); S.cmd = 'idle'; renderNow(); return; }
     if (rec.status === 'failed') return fail(rec.result || '执行失败');
     const age = Date.now() - began;
+    const p = current();
+    // 🔴 连接中要接着等，别按 8 秒判死。Mac 端 0.26.5 起会在订阅成功后补读
+    // 订阅前积压的指令（宽限 90 秒），所以这条命令多半马上就会被执行 ——
+    // 以前这里报「设备未回应」，而机器好好的，只是通道还没建起来。
+    if (isWaking(p)) {
+      if (age < 95000) { clearTimeout(S.cmdTimer); S.cmd = 'idle'; renderNow();
+                         setTimeout(tick, 1000); return; }
+      return fail('设备一直没连上');
+    }
     // 心跳同时失鲜就不报指令失败——原因要指向真问题。
-    if (!isLive(current())) { clearTimeout(S.cmdTimer); S.cmd = 'idle'; renderNow(); return; }
+    if (!isLive(p)) { clearTimeout(S.cmdTimer); S.cmd = 'idle'; renderNow(); return; }
     if (age > 8000) return fail('设备未回应');
     if (age > 3000) { clearTimeout(S.cmdTimer); S.cmd = 'slow'; renderNow(); }
     setTimeout(tick, 400);
