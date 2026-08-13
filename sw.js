@@ -2,7 +2,7 @@
 // talk to PocketBase — so nothing about devices or playback is ever cached;
 // only enough to make the installed app open instantly and not show a browser
 // error page when offline.
-const CACHE = 'soundstitch-console-v31';
+const CACHE = 'soundstitch-console-v32';
 const SHELL = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', e => {

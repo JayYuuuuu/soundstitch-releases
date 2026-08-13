@@ -30,7 +30,8 @@
  *   gesture* 事件       —— iOS 的捏合走的是 WebKit 私有事件，
  *                          光靠 viewport 的 user-scalable=no 拦不住
  * 横向滚动的设备条和滑块各自声明自己需要的方向，否则会被一起锁死。 */
-html,body{margin:0;height:100%;touch-action:pan-y;-webkit-text-size-adjust:100%}
+html,body{margin:0;height:100%;touch-action:pan-y;-webkit-text-size-adjust:100%;
+          overscroll-behavior:none}
 .chips{touch-action:pan-x}
 input[type=range]{touch-action:none}
 /* 🔴 每加一个纵向滚动容器就要在这里补一笔，否则它自己那一层又能左右拖了：
@@ -38,16 +39,27 @@ input[type=range]{touch-action:none}
    `overflow-y:auto` 会把 overflow-x 一起变成 auto（规范如此），于是内容
    哪怕只宽出几像素也能横着拽。两条一起写死方向。 */
 main,.sheet,.sbody,.picklist{touch-action:pan-y}
+/* 🔴 body 永不滚动，滚动只发生在 main 里。
+ *
+ * 用户报「PWA 下底部 tab 会跟着页面滚」——**不是 nav 的定位写错了**：
+ * 它一直是 flex 列里的 `flex:none`，在文档流里本来就不动。动的是它上面的整个
+ * body：iOS 的橡皮筋把整个外壳连同 tab 条一起拉走。所以要按住的是 body，
+ * 不是给 nav 加 `position:fixed`（那样反而要重算内容区高度，还会在键盘弹出时错位）。
+ * 抄 travelAA 的做法（`src/styles/globals.css`），那边把同一件事记作
+ * 「网页感的头号来源」。 */
 body{background:var(--bg);color:var(--t1);
   font:14px/1.5 -apple-system,"SF Pro Text","PingFang SC",system-ui,sans-serif;
-  -webkit-font-smoothing:antialiased;overscroll-behavior-y:none}
+  -webkit-font-smoothing:antialiased;
+  position:fixed;inset:0;overflow:hidden}
 .mono,.num{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-variant-numeric:tabular-nums}
 button,input{font:inherit;color:inherit}
 button{border:0;background:none;padding:0;cursor:pointer}
 .hide{display:none !important}
 .grow{flex:1}
 
-#app{display:flex;flex-direction:column;height:100dvh;max-width:480px;margin:0 auto;position:relative}
+/* body 已经钉死在视口上（见上），所以这里跟着它取 100% 就够，不必再算一次
+   dvh —— 键盘弹出时 dvh 会变，而固定的 body 不会。 */
+#app{display:flex;flex-direction:column;height:100%;max-width:480px;margin:0 auto;position:relative}
 .safe{padding-top:max(env(safe-area-inset-top),12px)}
 .bar{padding:0 16px 10px;display:flex;align-items:center;gap:8px}
 .bar h1{font-size:22px;font-weight:700;letter-spacing:-.02em;margin:0}
