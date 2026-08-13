@@ -977,7 +977,7 @@ function renderNow() {
   }
   const out = p.outputDevice || {};
   $('#nowName').textContent = p.currentName || '未选择';
-  const canPick = canRoute(p) && (p.audioDevices || []).length > 1;
+  const canPick = canRoute(p) && selectableDevices(p).length > 1;
   $('#nowOut').innerHTML = out.name
     ? `<span class="${canPick ? 'tapdev' : ''}">${esc(out.name)}</span>`
       + `<span class="badge ${out.bluetooth ? 'bt' : ''}">${esc(out.transport || '')}</span>`
@@ -1080,10 +1080,18 @@ function closeOutSheet() {
   setTimeout(() => { $('#scrim').classList.add('hide'); $('#outSheet').classList.add('hide'); }, 320);
 }
 
+/* 🔴 切走之后的 AirPlay 行不给按。
+ *
+ * macOS 在你切走之后**仍然把那一行留在 CoreAudio 里**，但切回去不会连回原来
+ * 那台目标（实测）——声音去了哪不知道，比没有这一行更糟。0.27.3 起 Mac 端上报
+ * 时就滤掉了；这里再滤一次是为了已经装在机器上的 0.27.0–0.27.2，它们照旧报全量。 */
+const selectableDevices = p =>
+  (p.audioDevices || []).filter(d => d.transport !== 'AirPlay' || d.default);
+
 function renderOutList() {
   const p = current();
   if (!p) return;
-  const devices = p.audioDevices || [];
+  const devices = selectableDevices(p);
   $('#oHint').textContent = '选中的设备接管这台 Mac 的全部声音';
   const box = $('#oList');
   box.innerHTML = '';
