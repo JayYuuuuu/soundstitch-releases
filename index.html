@@ -997,8 +997,7 @@ function renderNow() {
     ? '<path d="M6.5 5h4v14h-4zM13.5 5h4v14h-4z"/>' : '<path d="M8 5v14l11-7z"/>';
   // 手指还按在音量条上时别去写它的值——写 .value 会把滑块从手指底下拽走。
   if (!S.volHeld) {
-    const vol = p.currentItem ? (p.volume ?? 1) : (p.volume || 1);
-    $('#vol').value = Math.round(vol * 100);
+    $('#vol').value = Math.round(readVolume(p) * 100);
   }
   renderVolKind(p, out);
 
@@ -1022,6 +1021,19 @@ function renderNow() {
     else setBadge(...soundVerdict(p));
   }
   else setBadge(ended(p) ? '已播完' : '已暂停', '');
+}
+
+/* 🔴 音量 0 是一个真值，不是「没上报」。
+ *
+ * 以前这里写的是 `p.volume || 1`，于是**静音的机器在控制端显示满格** —— 拖到 0
+ * 之后松手，滑块自己弹回 100%，看起来像指令没生效（其实机器真的静音了）。
+ * 那个 `|| 1` 本来是为了兜「PocketBase 的 number 字段没被写过就是 0」，靠
+ * `currentItem` 猜有没有上报过；0.27.0 起音量是设备自己的音量，和装没装载成品
+ * 毫无关系，`volumeKind` 一存在就说明这台机器真的报了音量，0 就是 0。 */
+function readVolume(p) {
+  if (p.volumeKind) return p.volume ?? 0;
+  // 老版本不报 volumeKind，只能沿用旧的猜法：没装载东西时的 0 更可能是「没写过」。
+  return p.currentItem ? (p.volume ?? 1) : (p.volume || 1);
 }
 
 /* 音量徽标：拖这条到底会不会改这台机器的音量。
