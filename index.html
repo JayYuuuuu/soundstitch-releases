@@ -107,6 +107,13 @@ main{flex:1;overflow:hidden auto;padding:0 16px 16px;-webkit-overflow-scrolling:
 .spin{animation:spin 900ms linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 input[type=range]{width:100%;accent-color:var(--accent);height:44px}
+/* 音量条旁边一枚徽标，回答「拖它会不会真的改这台机器的音量」——
+   一句说明会比滑块本身还长，所以这里只放两三个字，原因进 title。 */
+.volrow{display:flex;align-items:center;gap:8px}
+.volrow input[type=range]{flex:1;min-width:0}
+.volrow .badge{flex:none}
+/* 可点的输出设备：底下一条虚线，说明这行不只是读数 */
+.now-out .tapdev{text-decoration:underline dotted;text-underline-offset:3px;cursor:pointer}
 
 .row{display:flex;align-items:center;gap:12px;min-height:56px;padding:6px 0}
 .row+.row{border-top:.5px solid var(--line)}
@@ -368,7 +375,10 @@ nav svg{width:22px;height:22px;fill:currentColor}
           <button id="bStop" class="key" aria-label="停止">
             <svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2.5"/></svg></button>
         </div>
-        <input id="vol" type="range" min="0" max="100" value="100" aria-label="音量">
+        <div class="volrow">
+          <input id="vol" type="range" min="0" max="100" value="100" aria-label="音量">
+          <span id="volKind" class="badge"></span>
+        </div>
       </div>
 
       <div class="card">
@@ -464,6 +474,15 @@ nav svg{width:22px;height:22px;fill:currentColor}
   <button id="iSave" class="primary">改名</button>
   <button id="iDel" class="mini danger">从控制端移除</button>
   <button id="iCancel" class="ghost">取消</button>
+</div>
+
+<div id="outSheet" class="sheet hide">
+  <div class="grab"></div>
+  <h2>从哪出声</h2>
+  <div id="oHint" class="sheetname"></div>
+  <div id="oList" class="picklist"></div>
+  <div id="outErr" class="err"></div>
+  <button id="oCancel" class="ghost">取消</button>
 </div>
 
 <div id="devSheet" class="sheet hide">
@@ -619,6 +638,10 @@ const rewindsAtEnd = p => p && atLeast(p.appVersion, '0.22.0');
 const splitsWindow = p => p && atLeast(p.appVersion, '0.23.0');
 // 「接着上次往下」是 0.24.0 才有的：老版本每次都从头播，开关在它们身上是假的。
 const canContinue = p => p && atLeast(p.appVersion, '0.24.0');
+// 切输出设备 + 推系统音量都是 0.27.0 才有的。老版本收到 output 会回
+// 「不认识的指令」，而它的音量滑块推的仍然只是声拼自己的增益——
+// 所以设备那行不给点，音量徽标照实说「仅声拼」。
+const canRoute = p => p && atLeast(p.appVersion, '0.27.0');
 
 /* 五格电平条：数字读不出「大概多响」，格子可以 */
 const meter = lv => {
@@ -954,10 +977,17 @@ function renderNow() {
   }
   const out = p.outputDevice || {};
   $('#nowName').textContent = p.currentName || '未选择';
+  const canPick = canRoute(p) && (p.audioDevices || []).length > 1;
   $('#nowOut').innerHTML = out.name
-    ? `${esc(out.name)}<span class="badge ${out.bluetooth ? 'bt' : ''}">${esc(out.transport || '')}</span>`
+    ? `<span class="${canPick ? 'tapdev' : ''}">${esc(out.name)}</span>`
+      + `<span class="badge ${out.bluetooth ? 'bt' : ''}">${esc(out.transport || '')}</span>`
       + (out.sampleRate ? `<span class="num" style="font-size:12px">${Math.round(out.sampleRate / 1000)} kHz</span>` : '')
     : '';
+  const tap = $('#nowOut .tapdev');
+  if (tap) {
+    tap.title = '换一个输出设备（和在 Mac 菜单栏里选是同一件事）';
+    tap.onclick = openOutSheet;
+  }
 
   const d = p.duration || 0, c = shownPosition(p, d);
   $('#prog').style.width = d ? (c / d * 100) + '%' : '0';
@@ -970,6 +1000,7 @@ function renderNow() {
     const vol = p.currentItem ? (p.volume ?? 1) : (p.volume || 1);
     $('#vol').value = Math.round(vol * 100);
   }
+  renderVolKind(p, out);
 
   // 设备离线优先于任何指令状态：原因要指向真问题，而不是报一个假的指令失败（3g）
   if (isWaking(p)) {
@@ -991,6 +1022,73 @@ function renderNow() {
     else setBadge(...soundVerdict(p));
   }
   else setBadge(ended(p) ? '已播完' : '已暂停', '');
+}
+
+/* 音量徽标：拖这条到底会不会改这台机器的音量。
+ *
+ * 用户报的就是这件事 —— 控制端拖到 50%，Mac 上的音量条纹丝不动，因为当时推的
+ * 只是 AVPlayer 的软件增益。现在 Mac 优先写设备自己的音量，写不动才退回软件
+ * 增益（DisplayPort 显示器那种压根没有音量控制的设备，实测确有）。两种情况
+ * 手感完全一样，所以必须由徽标说清楚，不能让人拖完自己去猜。 */
+function renderVolKind(p, out) {
+  const el = $('#volKind');
+  if (!canRoute(p)) {
+    el.className = 'badge';
+    el.textContent = '仅声拼';
+    el.title = '这台 Mac 还是 0.27.0 以前的版本：音量只压声拼自己这一路，不动系统音量。升级后两边就是同一个数字。';
+    return;
+  }
+  if (p.volumeKind === 'system') {
+    el.className = 'badge ok';
+    el.textContent = '机器音量';
+    el.title = `和 Mac 菜单栏里的音量条是同一个数字：${out.name ? '「' + out.name + '」' : '这台机器'}上所有声音都跟着变。`;
+  } else {
+    el.className = 'badge';
+    el.textContent = '仅声拼';
+    el.title = `${out.name ? '「' + out.name + '」' : '这个设备'}没有硬件音量控制（DisplayPort 显示器常见），只能压声拼自己这一路，系统音量不会动。`;
+  }
+}
+
+/* 输出设备：切的是系统默认输出，和在 Mac 菜单栏里选是同一件事。
+ *
+ * 一个事实源。只切声拼自己那一路（AVPlayer.audioOutputDeviceUniqueID）也做得到，
+ * 但那样声拼在 A 上响、系统音量条指着 B，又是一次「两个数字对不上」。 */
+function openOutSheet() {
+  if (!current()) return;
+  renderOutList();
+  $('#outErr').textContent = '';
+  $('#scrim').classList.remove('hide'); $('#outSheet').classList.remove('hide');
+  requestAnimationFrame(() => {
+    $('#scrim').classList.add('show'); $('#outSheet').classList.add('show');
+  });
+}
+
+function closeOutSheet() {
+  $('#scrim').classList.remove('show'); $('#outSheet').classList.remove('show');
+  setTimeout(() => { $('#scrim').classList.add('hide'); $('#outSheet').classList.add('hide'); }, 320);
+}
+
+function renderOutList() {
+  const p = current();
+  if (!p) return;
+  const devices = p.audioDevices || [];
+  $('#oHint').textContent = '选中的设备接管这台 Mac 的全部声音';
+  const box = $('#oList');
+  box.innerHTML = '';
+  for (const d of devices) {
+    const b = document.createElement('button');
+    b.className = 'pick' + (d.default ? ' on' : '');
+    // 「无音量」是一条真结论，不是修饰：切过去之后音量条就只能压声拼了。
+    const note = (d.transport || '') + (d.hasVolume === false ? ' · 无音量' : '');
+    b.innerHTML = `<span class="ord">${d.default ? '✓' : ''}</span>
+      <span class="pname">${esc(d.name)}</span>
+      <span class="plen">${esc(note)}</span>`;
+    b.onclick = () => {
+      if (!d.default) cmd('output', { deviceUID: d.uid });
+      closeOutSheet();
+    };
+    box.appendChild(b);
+  }
 }
 
 /* 「现在有没有声音」是个错问题。
@@ -1091,6 +1189,7 @@ function disarmDelete() {
 }
 
 $('#iCancel').onclick = closeItemSheet;
+$('#oCancel').onclick = closeOutSheet;
 
 $('#iSave').onclick = async () => {
   const it = S.manageItem, name = $('#iName').value.trim();
@@ -1673,6 +1772,7 @@ $('#cancelRule').onclick = closeSheet;
 $('#scrim').onclick = () => {
   if (!$('#itemSheet').classList.contains('hide')) return closeItemSheet();
   if (!$('#devSheet').classList.contains('hide')) return closeDevSheet();
+  if (!$('#outSheet').classList.contains('hide')) return closeOutSheet();
   closeSheet();
 };
 
