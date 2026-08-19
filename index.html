@@ -564,10 +564,11 @@ const S = {
   token: localStorage.ssToken || '',
   players: [], items: [], scheds: [], runs: [], openHist: null, sel: null, selItem: null,
   logRule: '',
-  tab: 'now', es: null, retries: 0, cmd: 'idle', failMsg: '',
+  tab: 'now', es: null, retries: 0, cmd: 'idle', failMsg: '', doneMsg: '', doneTimer: null,
   cmdTimer: null, failTimer: null,
   manageItem: null, armTimer: null,
   itemTab: 'local', shared: [], manageShared: null, armTimer2: null, audio: null, auditioning: null,
+  auditionErr: '', auditionErrID: null, auditionTimer: null,
   pos: null, volHeld: false, devTarget: null,
 };
 const DAYS = ['日', '一', '二', '三', '四', '五', '六'];   // 下标 = weekday-1
@@ -1112,6 +1113,8 @@ function renderNow() {
   else if (S.cmd === 'pending') setBadge('下发中', 'acc', true);
   else if (S.cmd === 'slow') setBadge('未回应', 'bt', true);
   else if (S.cmd === 'fail') setBadge(S.failMsg || '失败 · 重试', 'bad');
+  else if (S.cmd === 'done') setBadge(S.doneMsg.length > 22 ? S.doneMsg.slice(0, 21) + '…' : S.doneMsg,
+                                      'ok', false, S.doneMsg);
   else if (p.state === 'playing') {
     // 「播放中」本身不证明有声音：解码失败、停滞、静音、或这段本就是空白，
     // 从外面看全都一样。所以分开说，并把实测电平画出来。
@@ -1235,9 +1238,10 @@ function soundVerdict(p) {
   return [`已播 ${Math.round(playing / 60)} 分还没出过声`, 'bad'];
 }
 
-function setBadge(text, kind, spinning) {
+function setBadge(text, kind, spinning, full) {
   const el = $('#cmdBadge');
   el.className = 'badge' + (kind ? ' ' + kind : '');
+  el.title = full || '';
   el.innerHTML = (spinning
     ? '<svg class="spin" viewBox="0 0 24 24" width="10" height="10"><path fill="currentColor" d="M12 2a10 10 0 019.5 6.9l-1.9.6A8 8 0 1012 20v2A10 10 0 1112 2z"/></svg>'
     : '') + esc(text);
@@ -1297,17 +1301,44 @@ async function loadShared() {
 
 const sharedURL = it => `${S.url}/api/files/ss_shared/${it.id}/${it.file}`;
 
-/* 试听在浏览器里出声，不惊动任何一台 Mac。
+/* 🔴 试听在**这台设备**上出声（手机就是手机的喇叭），完全不惊动任何一台 Mac。
+ * 这跟「播放」是两件事，别混：
+ *   试听 = 这个浏览器放，用来确认「这条是哪个」
+ *   下到本机之后点播放 = 遥控那台 Mac 放，声音从它接的音箱出来
+ * 所以播放中把那一行的副标题换成「在这台设备上播放 · 进度」——
+ * 用户问过「试听是不是远程播放」，屏幕上没有一处回答过这个问题就是设计漏了。
+ *
  * PB 的 file 字段没设 protected，所以直接就能播，不用换 file token；
  * 文件名带随机后缀，URL 猜不出来。 */
 function audition(it) {
-  if (S.auditioning === it.id) { stopAudition(); return; }
+  if (S.auditioning === it.id) { stopAudition(); renderShared(); return; }
   stopAudition();
+  S.auditionErr = '';
   S.audio = new Audio(sharedURL(it));
   S.audio.onended = () => { S.auditioning = null; renderShared(); };
-  S.audio.onerror = () => { S.auditioning = null; renderShared(); };
+  // 🔴 失败必须出声。原来这里静默复位，按钮自己弹回「试听」而一句话没有 ——
+  // 从外面看和「点了没反应」一模一样。
+  S.audio.onerror = () => { auditionFailed('这台设备放不出这个文件'); };
+  // 进度直接改那一个元素，不重绘整张列表：正在按的按钮被重绘就会丢掉点击。
+  S.audio.ontimeupdate = () => {
+    const el = document.querySelector(`[data-sub="${it.id}"]`);
+    if (el) el.textContent = `在这台设备上播放 · ${fmt(S.audio.currentTime)} / ${fmt(it.duration)}`;
+  };
   S.audio.play().then(() => { S.auditioning = it.id; renderShared(); })
-    .catch(() => { S.auditioning = null; renderShared(); });
+    // 区分两种失败：文件根本没加载出来（audio.error 有值）和自动播放被拦。
+    // 报错报错了方向，用户就会去修一个不存在的问题。
+    .catch(() => auditionFailed(S.audio && S.audio.error
+                                ? '这台设备放不出这个文件'
+                                : '浏览器拦下了播放，再点一次'));
+}
+
+function auditionFailed(why) {
+  S.audio = null;
+  S.auditioning = null;
+  S.auditionErr = why;
+  renderShared();
+  clearTimeout(S.auditionTimer);
+  S.auditionTimer = setTimeout(() => { S.auditionErr = ''; renderShared(); }, 5000);
 }
 
 function stopAudition() {
@@ -1334,14 +1365,21 @@ function renderShared() {
     const el = document.createElement('div');
     el.className = 'row';
     const playing = S.auditioning === it.id;
+    const sub = playing ? '在这台设备上播放'
+              : (S.auditionErr && S.auditionErrID === it.id) ? S.auditionErr
+              : `${fmt(it.duration)} · ${size(it.fileSize)}`;
     el.innerHTML = `<span class="rowmain">
         <div style="font-weight:500">${esc(it.name)}</div>
-        <div class="rowsub num">${fmt(it.duration)} · ${size(it.fileSize)}</div></span>
+        <div class="rowsub num" data-sub="${it.id}"${
+          (S.auditionErr && S.auditionErrID === it.id) ? ' style="color:var(--bad)"' : ''
+        }>${esc(sub)}</div></span>
       <button class="mini more" aria-label="管理">⋯</button>
       <button class="mini play">${playing ? '停' : '试听'}</button>
       <button class="mini acc" ${pullable ? '' : 'disabled'}>${pullable ? '下到这台' : '设备需更新'}</button>`;
     el.querySelector('.more').onclick = e => { e.stopPropagation(); openSharedSheet(it); };
-    el.querySelector('.play').onclick = e => { e.stopPropagation(); audition(it); };
+    const listen = el.querySelector('.play');
+    listen.title = '在你现在用的这台设备上放（手机就是手机的喇叭），不遥控任何 Mac';
+    listen.onclick = e => { e.stopPropagation(); S.auditionErrID = it.id; audition(it); };
     const pull = el.querySelector('.acc');
     // 🔴 一个点不动又不说为什么的按钮，比没有这个按钮更糟。手机上没有 hover，
     // 所以原因必须写在按钮**脸上**，tip 只补细节。
@@ -1552,7 +1590,20 @@ function watch(id, limit = 8000) {
     let rec;
     try { rec = await api('/api/collections/ss_commands/records/' + id); }
     catch { return; }
-    if (rec.status === 'done') { clearTimeout(S.cmdTimer); S.cmd = 'idle'; renderNow(); return; }
+    if (rec.status === 'done') {
+      clearTimeout(S.cmdTimer);
+      // 🔴 以前 done 只是把转圈收掉，屏幕上什么也不说 —— 下载完了、或者
+      // 「本机已有同一份」这种最该看见的结论，全都只留在 ss_commands.result 里，
+      // 而那是没人会去翻的地方。成功和失败一样需要一句话。
+      S.doneMsg = rec.result || '';
+      S.cmd = S.doneMsg ? 'done' : 'idle';
+      renderNow();
+      clearTimeout(S.doneTimer);
+      if (S.doneMsg) S.doneTimer = setTimeout(() => {
+        if (S.cmd === 'done') { S.cmd = 'idle'; S.doneMsg = ''; renderNow(); }
+      }, 6000);
+      return;
+    }
     if (rec.status === 'failed') return fail(rec.result || '执行失败');
     const age = Date.now() - began;
     const p = current();
