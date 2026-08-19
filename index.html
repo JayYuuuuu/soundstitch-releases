@@ -274,6 +274,8 @@ nav svg{width:22px;height:22px;fill:currentColor}
 .primary:active{transform:scale(.98)}
 .ghost{width:100%;height:44px;border-radius:12px;color:var(--t2);font-size:15px;margin-top:6px}
 .err{color:var(--bad);font-size:13px;padding:4px 0;text-align:center}
+/* 版本落后不是故障，是「这台还差点东西」。红色留给真的失败。 */
+.err.soft{color:var(--bt)}
 
 #login{padding:0 16px}
 #login h2{font-size:26px;font-weight:700;letter-spacing:-.02em;margin:8px 0 20px}
@@ -527,8 +529,9 @@ nav svg{width:22px;height:22px;fill:currentColor}
 
 <div id="devSheet" class="sheet hide">
   <div class="grab"></div>
-  <h2>设备名称</h2>
+  <h2>设备</h2>
   <div id="dMachine" class="sheetname"></div>
+  <div id="dVer" class="err soft hide"></div>
   <input id="dName" class="tinput" type="text" enterkeyhint="done" maxlength="60" aria-label="设备名称">
   <div id="devErr" class="err"></div>
   <button id="dSave" class="primary">保存</button>
@@ -694,6 +697,21 @@ const canRoute = p => p && atLeast(p.appVersion, '0.27.0');
 // 上传到共享 / 下到这台机器都要 Mac 端执行（文件在它上面，网页手里没有字节）。
 // 0.29.0 之前收到 share/pull 会回「不认识的指令」，所以老机器上这两个按钮不给。
 const canShare = p => p && atLeast(p.appVersion, '0.29.0');
+
+/* 哪些功能要哪个版本 —— 新到旧。设备弹窗用它回答「这台差在哪」。
+ * 🔴 加了新的版本卡点就往这里补一条，否则设备弹窗会说「一切正常」，
+ * 而按钮那边照样是灰的，两处对不上比不说更糟。 */
+const FEATURES = [
+  { min: '0.29.0', name: '共享音频库' },
+  { min: '0.27.0', name: '切输出设备 / 机器音量' },
+  { min: '0.24.0', name: '接着上次往下播' },
+  { min: '0.23.0', name: '时段内分次播' },
+  { min: '0.22.0', name: '播完再按播放' },
+  { min: '0.21.0', name: '停这一次' },
+  { min: '0.18.0', name: '定时执行日志' },
+  { min: '0.13.0', name: '成品改名 / 移除' },
+];
+const missingFeatures = p => FEATURES.filter(f => !atLeast(p && p.appVersion, f.min));
 
 /* 五格电平条：数字读不出「大概多响」，格子可以 */
 const meter = lv => {
@@ -961,7 +979,19 @@ function renderChips() {
 function openDevSheet(p) {
   S.devTarget = p.id;
   $('#dName').value = p.label || '';
-  $('#dMachine').textContent = p.name || '';
+  $('#dMachine').textContent = `${p.name || ''} · v${p.appVersion || '?'}`;
+  // 版本落后时说清楚差在哪。升级是一次性的，所以只报要求最高的那条，
+  // 后面缀上还差几项——列一长串没人读，也不改变要做的事（去点检查更新）。
+  const missing = missingFeatures(p);
+  const verLine = $('#dVer');
+  if (missing.length) {
+    const more = missing.length > 1 ? `等 ${missing.length} 项功能` : '';
+    verLine.textContent = `${missing[0].name}${more}需要 ${missing[0].min}，在那台 Mac 上点菜单「检查更新」`;
+    verLine.classList.remove('hide');
+  } else {
+    verLine.textContent = '';
+    verLine.classList.add('hide');
+  }
   $('#devErr').textContent = '';
   $('#scrim').classList.remove('hide'); $('#devSheet').classList.remove('hide');
   requestAnimationFrame(() => {
