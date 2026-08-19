@@ -412,7 +412,7 @@ nav svg{width:22px;height:22px;fill:currentColor}
           </div>
           <span id="itemCount" class="num" style="font-weight:400"></span>
           <span style="flex:1"></span>
-          <button id="bFetch" class="mini" style="height:26px;min-width:0;padding:0 10px;font-size:12px">从链接…</button>
+          <button id="bFetch" class="mini" style="height:26px;min-width:0;padding:0 10px;font-size:12px">下载音频</button>
         </div>
         <div id="items"></div>
         <div id="shared" class="hide"></div>
@@ -511,12 +511,12 @@ nav svg{width:22px;height:22px;fill:currentColor}
 
 <div id="fetchSheet" class="sheet hide">
   <div class="grab"></div>
-  <h2>从链接抓音频</h2>
+  <h2>下载音频</h2>
   <div id="fTarget" class="sheetname"></div>
   <input id="fLink" class="tinput" type="text" enterkeyhint="go" aria-label="链接"
          placeholder="粘贴小红书分享口令，或视频直链">
   <div id="fetchErr" class="err"></div>
-  <button id="fGo" class="primary">抓取</button>
+  <button id="fGo" class="primary">下载</button>
   <button id="fCancel" class="ghost">取消</button>
 </div>
 
@@ -717,7 +717,7 @@ const canFetch = p => p && atLeast(p.appVersion, '0.30.0');
  * 🔴 加了新的版本卡点就往这里补一条，否则设备弹窗会说「一切正常」，
  * 而按钮那边照样是灰的，两处对不上比不说更糟。 */
 const FEATURES = [
-  { min: '0.30.0', name: '从链接抓音频' },
+  { min: '0.30.0', name: '下载音频' },
   { min: '0.29.0', name: '共享音频库' },
   { min: '0.27.0', name: '切输出设备 / 机器音量' },
   { min: '0.24.0', name: '接着上次往下播' },
@@ -1406,10 +1406,10 @@ function openFetchSheet() {
   const p = current();
   $('#fLink').value = '';
   $('#fetchErr').textContent = '';
-  $('#fTarget').textContent = p ? `抓到 ${deviceName(p)}` : '先选一台设备';
+  $('#fTarget').textContent = p ? `下载到 ${deviceName(p)}` : '先选一台设备';
   const ok = canFetch(p);
   $('#fGo').disabled = !ok;
-  $('#fGo').textContent = ok ? '抓取' : '抓取（设备需更新）';
+  $('#fGo').textContent = ok ? '下载' : '下载（设备需更新）';
   $('#scrim').classList.remove('hide'); $('#fetchSheet').classList.remove('hide');
   requestAnimationFrame(() => {
     $('#scrim').classList.add('show'); $('#fetchSheet').classList.add('show');
@@ -1426,7 +1426,7 @@ $('#fGo').onclick = () => {
   const p = current(), link = $('#fLink').value.trim();
   if (!canFetch(p)) {
     $('#fetchErr').textContent =
-      `${deviceName(p)} 还是旧版（${p && p.appVersion || '?'}），升到 0.30.0 以上才能抓链接`;
+      `${deviceName(p)} 还是旧版（${p && p.appVersion || '?'}），升到 0.30.0 以上才能下载音频`;
     return;
   }
   if (!link) { $('#fetchErr').textContent = '把整段分享口令粘进来就行'; return; }
