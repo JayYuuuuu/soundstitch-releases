@@ -1293,12 +1293,15 @@ function renderShared() {
         <div class="rowsub num">${fmt(it.duration)} · ${size(it.fileSize)}</div></span>
       <button class="mini more" aria-label="管理">⋯</button>
       <button class="mini play">${playing ? '停' : '试听'}</button>
-      <button class="mini acc" ${pullable ? '' : 'disabled'}>下到这台</button>`;
+      <button class="mini acc" ${pullable ? '' : 'disabled'}>${pullable ? '下到这台' : '设备需更新'}</button>`;
     el.querySelector('.more').onclick = e => { e.stopPropagation(); openSharedSheet(it); };
     el.querySelector('.play').onclick = e => { e.stopPropagation(); audition(it); };
     const pull = el.querySelector('.acc');
+    // 🔴 一个点不动又不说为什么的按钮，比没有这个按钮更糟。手机上没有 hover，
+    // 所以原因必须写在按钮**脸上**，tip 只补细节。
     pull.title = pullable ? '下载到当前选中的这台 Mac，之后就是一个普通本地素材'
-                          : '这台 Mac 的版本还不认得「下载共享」（需要 0.29.0）';
+                          : `${deviceName(p)} 还是旧版（${p && p.appVersion || '?'}），` +
+                            '在那台 Mac 上点菜单「检查更新」升到 0.29.0 以上就能用';
     pull.onclick = e => { e.stopPropagation(); if (pullable) cmd('pull', { itemId: it.id }); };
     box.appendChild(el);
   }
@@ -1328,6 +1331,9 @@ function openItemSheet(it) {
   $('#iName').value = it.name;
   $('#iPath').textContent = it.localPath || '';
   $('#itemErr').textContent = '';
+  const p = current();
+  $('#iShare').disabled = !canShare(p);
+  $('#iShare').textContent = canShare(p) ? '上传到共享' : '上传到共享（设备需更新）';
   disarmDelete();
   $('#scrim').classList.remove('hide'); $('#itemSheet').classList.remove('hide');
   requestAnimationFrame(() => {
@@ -1400,8 +1406,13 @@ $('#sDel').onclick = async () => {
 };
 
 $('#iShare').onclick = () => {
-  const it = S.manageItem;
+  const it = S.manageItem, p = current();
   if (!it) return;
+  if (!canShare(p)) {
+    $('#itemErr').textContent =
+      `${deviceName(p)} 还是旧版（${p && p.appVersion || '?'}），升到 0.29.0 以上才能上传共享`;
+    return;
+  }
   closeItemSheet();
   // 字节在 Mac 上，所以这是一条指令而不是一次网页上传。
   cmd('share', { localPath: it.localPath, name: it.name });
