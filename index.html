@@ -558,6 +558,14 @@ const DAYS = ['日', '一', '二', '三', '四', '五', '六'];   // 下标 = we
 
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+/* 🔴 不用 bytes/1048576：不到 1MB 全都读成 0（或 0.0）MB，
+ * 354 KB 的素材不是零，一列全是 0 MB 的行等于什么也没说。 */
+const size = n => {
+  n = Number(n) || 0;
+  if (n >= 1048576) return (n / 1048576).toFixed(1) + ' MB';
+  if (n >= 1024) return Math.round(n / 1024) + ' KB';
+  return n + ' B';
+};
 const fmt = s => {
   s = Math.max(0, Math.floor(s || 0));
   const h = (s / 3600) | 0, m = ((s % 3600) / 60) | 0, x = s % 60;
@@ -1209,7 +1217,7 @@ function renderItems() {
     const on = it.id === S.selItem;
     el.innerHTML = `<span class="rowmain">
         <div style="font-weight:500;color:${on ? 'var(--accent)' : 'inherit'}">${esc(it.name)}</div>
-        <div class="rowsub num">${fmt(it.duration)} · ${(it.fileSize / 1048576).toFixed(1)} MB</div></span>
+        <div class="rowsub num">${fmt(it.duration)} · ${size(it.fileSize)}</div></span>
       ${manage ? '<button class="mini more" aria-label="管理">⋯</button>' : ''}
       <button class="mini acc">播放</button>`;
     if (manage) {
@@ -1282,7 +1290,7 @@ function renderShared() {
     const playing = S.auditioning === it.id;
     el.innerHTML = `<span class="rowmain">
         <div style="font-weight:500">${esc(it.name)}</div>
-        <div class="rowsub num">${fmt(it.duration)} · ${(it.fileSize / 1048576).toFixed(1)} MB</div></span>
+        <div class="rowsub num">${fmt(it.duration)} · ${size(it.fileSize)}</div></span>
       <button class="mini more" aria-label="管理">⋯</button>
       <button class="mini play">${playing ? '停' : '试听'}</button>
       <button class="mini acc" ${pullable ? '' : 'disabled'}>下到这台</button>`;
@@ -1343,7 +1351,7 @@ function openSharedSheet(it) {
   S.manageShared = it;
   $('#sName').value = it.name;
   const from = String(it.sourceDevice || '').replace(/^虞杰(的|’s|'s)\s*/, '');
-  $('#sName2').textContent = `${fmt(it.duration)} · ${(it.fileSize / 1048576).toFixed(1)} MB` +
+  $('#sName2').textContent = `${fmt(it.duration)} · ${size(it.fileSize)}` +
                              (from ? ` · 来自 ${from}` : '');
   $('#sharedErr').textContent = '';
   disarmSharedDelete();
