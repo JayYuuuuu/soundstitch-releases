@@ -130,12 +130,21 @@ input[type=range]{width:100%;accent-color:var(--accent);height:44px}
 .row{display:flex;align-items:center;gap:12px;min-height:56px;padding:6px 0}
 .row+.row{border-top:.5px solid var(--line)}
 .rowmain{flex:1;min-width:0}
+/* 名字多长都只占一行：列表行高一变，整页就开始跳。全名在 ⋯ 弹窗里看得到。 */
+.rowmain>div{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .rowsub{font-size:13px;color:var(--t2);margin-top:2px}
 .empty{text-align:center;padding:28px 8px;color:var(--t3);font-size:13px;line-height:1.7}
 .mini{height:40px;min-width:44px;padding:0 14px;border-radius:9px;background:var(--card2);
       font-size:14px;font-weight:500}
 .mini.acc{background:var(--accent);color:#fff}
 .mini.more{padding:0 10px;min-width:38px;color:var(--t2);font-size:17px;line-height:1}
+.mini.play{padding:0 11px;min-width:40px;font-size:13px}
+/* 成品/共享切换：两段小控件，和 .cap 同一行。选中只用底色说，不用颜色喊。 */
+.caprow{display:flex;align-items:center;gap:6px}
+.seg{display:inline-flex;background:var(--card2);border-radius:8px;padding:2px;gap:2px}
+.seg button{border:0;background:none;color:var(--t2);font:inherit;font-size:11px;font-weight:600;
+  padding:4px 10px;border-radius:6px;cursor:pointer}
+.seg button.on{background:var(--card);color:var(--t1);box-shadow:0 1px 2px rgba(0,0,0,.12)}
 .mini.danger{background:none;color:var(--bad);width:100%;height:48px;font-size:15px}
 /* 二次确认不另开一层弹窗：按钮自己变成「确认移除」，一行说清代价 */
 .mini.danger.armed{background:var(--bad);color:#fff}
@@ -394,8 +403,15 @@ nav svg{width:22px;height:22px;fill:currentColor}
       </div>
 
       <div class="card">
-        <div class="cap" style="margin-bottom:4px">成品</div>
+        <div class="cap caprow" style="margin-bottom:4px">
+          <div class="seg" id="itemSeg">
+            <button data-t="local" class="on">本机</button>
+            <button data-t="shared">共享</button>
+          </div>
+          <span id="itemCount" class="num" style="font-weight:400"></span>
+        </div>
         <div id="items"></div>
+        <div id="shared" class="hide"></div>
       </div>
     </main>
 
@@ -484,8 +500,20 @@ nav svg{width:22px;height:22px;fill:currentColor}
   <input id="iName" class="tinput" type="text" enterkeyhint="done" aria-label="名称">
   <div id="itemErr" class="err"></div>
   <button id="iSave" class="primary">改名</button>
+  <button id="iShare" class="mini" style="width:100%;height:48px;font-size:15px;margin-top:8px">上传到共享</button>
   <button id="iDel" class="mini danger">从控制端移除</button>
   <button id="iCancel" class="ghost">取消</button>
+</div>
+
+<div id="sharedSheet" class="sheet hide">
+  <div class="grab"></div>
+  <h2>管理共享音频</h2>
+  <div id="sName2" class="sheetname"></div>
+  <input id="sName" class="tinput" type="text" enterkeyhint="done" aria-label="名称">
+  <div id="sharedErr" class="err"></div>
+  <button id="sSave" class="primary">改名</button>
+  <button id="sDel" class="mini danger">从共享库删除</button>
+  <button id="sCancel" class="ghost">取消</button>
 </div>
 
 <div id="outSheet" class="sheet hide">
@@ -523,6 +551,7 @@ const S = {
   tab: 'now', es: null, retries: 0, cmd: 'idle', failMsg: '',
   cmdTimer: null, failTimer: null,
   manageItem: null, armTimer: null,
+  itemTab: 'local', shared: [], manageShared: null, armTimer2: null, audio: null, auditioning: null,
   pos: null, volHeld: false, devTarget: null,
 };
 const DAYS = ['日', '一', '二', '三', '四', '五', '六'];   // 下标 = weekday-1
@@ -654,6 +683,9 @@ const canContinue = p => p && atLeast(p.appVersion, '0.24.0');
 // 「不认识的指令」，而它的音量滑块推的仍然只是声拼自己的增益——
 // 所以设备那行不给点，音量徽标照实说「仅声拼」。
 const canRoute = p => p && atLeast(p.appVersion, '0.27.0');
+// 上传到共享 / 下到这台机器都要 Mac 端执行（文件在它上面，网页手里没有字节）。
+// 0.29.0 之前收到 share/pull 会回「不认识的指令」，所以老机器上这两个按钮不给。
+const canShare = p => p && atLeast(p.appVersion, '0.29.0');
 
 /* 五格电平条：数字读不出「大概多响」，格子可以 */
 const meter = lv => {
@@ -841,7 +873,7 @@ $('#out').onclick = () => {
 async function start() {
   $('#login').classList.add('hide');
   $('#shell').classList.remove('hide');
-  try { await loadPlayers(); connectRealtime(); }
+  try { await loadPlayers(); connectRealtime(); loadShared().catch(() => {}); }
   catch (e) {
     if (/40[13]/.test(String(e.message))) { localStorage.removeItem('ssToken'); location.reload(); }
     $('#loginErr').textContent = String(e.message || e);
@@ -1161,7 +1193,7 @@ function setBadge(text, kind, spinning) {
 async function loadItems() {
   const r = await api('/api/collections/ss_items/records?perPage=200&sort=-created&filter=' +
                       encodeURIComponent(`player='${S.sel}'`));
-  S.items = r.items || []; renderItems();
+  S.items = r.items || []; renderItems(); renderItemCount();
 }
 
 function renderItems() {
@@ -1188,6 +1220,93 @@ function renderItems() {
     box.appendChild(el);
   }
 }
+
+/* ---------- 共享音频（ss_shared）----------
+ *
+ * 账号级，不属于任何一台机器——所以它和「本机成品」是两份列表，不是一份加个标记。
+ * 服务端实测：ss_items.player 是必填 relation，还带 UNIQUE(player, localPath)，
+ * 它的语义就是「那台机器上的那个文件」，塞不下一条没有机器也没有路径的记录。
+ *
+ * 🔴 改名 / 删除直接改 PocketBase，不走 ss_commands —— 和成品正相反。
+ * 成品必须走指令，是因为清单同时存在两处（Mac 的 library.json + 服务端），
+ * 只改一处会被下次 syncLibrary 覆盖回去。共享条目只存在服务端这一份，
+ * 没有第二份要同步，所以直接改；好处是睡着的、关机的机器都不耽误。
+ *
+ * 上传和下载则必须走指令：字节在 Mac 上，网页手里没有文件。
+ */
+async function loadShared() {
+  const r = await api('/api/collections/ss_shared/records?perPage=200&sort=-created');
+  S.shared = r.items || [];
+  if (S.itemTab === 'shared') renderShared();
+  renderItemCount();
+}
+
+const sharedURL = it => `${S.url}/api/files/ss_shared/${it.id}/${it.file}`;
+
+/* 试听在浏览器里出声，不惊动任何一台 Mac。
+ * PB 的 file 字段没设 protected，所以直接就能播，不用换 file token；
+ * 文件名带随机后缀，URL 猜不出来。 */
+function audition(it) {
+  if (S.auditioning === it.id) { stopAudition(); return; }
+  stopAudition();
+  S.audio = new Audio(sharedURL(it));
+  S.audio.onended = () => { S.auditioning = null; renderShared(); };
+  S.audio.onerror = () => { S.auditioning = null; renderShared(); };
+  S.audio.play().then(() => { S.auditioning = it.id; renderShared(); })
+    .catch(() => { S.auditioning = null; renderShared(); });
+}
+
+function stopAudition() {
+  if (S.audio) { S.audio.pause(); S.audio = null; }
+  S.auditioning = null;
+}
+
+function renderItemCount() {
+  const n = S.itemTab === 'local' ? S.items.length : S.shared.length;
+  $('#itemCount').textContent = n ? `${n} 条` : '';
+}
+
+function renderShared() {
+  const box = $('#shared');
+  if (!S.shared.length) {
+    box.innerHTML = '<div class="empty">共享库是空的<br>' +
+      '在「本机」里点 ⋯ →「上传到共享」，别的机器就能拉下来</div>';
+    renderItemCount(); return;
+  }
+  box.innerHTML = '';
+  const p = current();
+  const pullable = canShare(p);
+  for (const it of S.shared) {
+    const el = document.createElement('div');
+    el.className = 'row';
+    const playing = S.auditioning === it.id;
+    el.innerHTML = `<span class="rowmain">
+        <div style="font-weight:500">${esc(it.name)}</div>
+        <div class="rowsub num">${fmt(it.duration)} · ${(it.fileSize / 1048576).toFixed(1)} MB</div></span>
+      <button class="mini more" aria-label="管理">⋯</button>
+      <button class="mini play">${playing ? '停' : '试听'}</button>
+      <button class="mini acc" ${pullable ? '' : 'disabled'}>下到这台</button>`;
+    el.querySelector('.more').onclick = e => { e.stopPropagation(); openSharedSheet(it); };
+    el.querySelector('.play').onclick = e => { e.stopPropagation(); audition(it); };
+    const pull = el.querySelector('.acc');
+    pull.title = pullable ? '下载到当前选中的这台 Mac，之后就是一个普通本地素材'
+                          : '这台 Mac 的版本还不认得「下载共享」（需要 0.29.0）';
+    pull.onclick = e => { e.stopPropagation(); if (pullable) cmd('pull', { itemId: it.id }); };
+    box.appendChild(el);
+  }
+  renderItemCount();
+}
+
+function switchItemTab(t) {
+  S.itemTab = t;
+  for (const b of $('#itemSeg').querySelectorAll('button')) b.classList.toggle('on', b.dataset.t === t);
+  $('#items').classList.toggle('hide', t !== 'local');
+  $('#shared').classList.toggle('hide', t !== 'shared');
+  if (t === 'shared') { renderShared(); loadShared().catch(() => {}); }
+  else { stopAudition(); renderItems(); }
+  renderItemCount();
+}
+$('#itemSeg').onclick = e => { const b = e.target.closest('button'); if (b) switchItemTab(b.dataset.t); };
 
 /* ---------- 成品管理：改名 / 移除 ----------
  *
@@ -1219,6 +1338,66 @@ function disarmDelete() {
   b.textContent = '从控制端移除';
   clearTimeout(S.armTimer);
 }
+
+function openSharedSheet(it) {
+  S.manageShared = it;
+  $('#sName').value = it.name;
+  const from = String(it.sourceDevice || '').replace(/^虞杰(的|’s|'s)\s*/, '');
+  $('#sName2').textContent = `${fmt(it.duration)} · ${(it.fileSize / 1048576).toFixed(1)} MB` +
+                             (from ? ` · 来自 ${from}` : '');
+  $('#sharedErr').textContent = '';
+  disarmSharedDelete();
+  // 手写开合，和 openItemSheet 一样：openSheet/closeSheet 那对是定时规则弹窗专用的。
+  $('#scrim').classList.remove('hide'); $('#sharedSheet').classList.remove('hide');
+  requestAnimationFrame(() => {
+    $('#scrim').classList.add('show'); $('#sharedSheet').classList.add('show');
+  });
+}
+function closeSharedSheet() {
+  $('#scrim').classList.remove('show'); $('#sharedSheet').classList.remove('show');
+  setTimeout(() => { $('#scrim').classList.add('hide'); $('#sharedSheet').classList.add('hide'); }, 320);
+}
+function disarmSharedDelete() {
+  const b = $('#sDel');
+  b.classList.remove('armed');
+  b.textContent = '从共享库删除';
+  clearTimeout(S.armTimer2);
+}
+$('#sCancel').onclick = closeSharedSheet;
+$('#sSave').onclick = async () => {
+  const it = S.manageShared, name = $('#sName').value.trim();
+  if (!it) return;
+  if (!name) { $('#sharedErr').textContent = '名称不能为空'; return; }
+  if (name === it.name) return closeSharedSheet();
+  try {
+    // 直接改服务端：共享条目只有这一份，没有第二份要同步（见本节开头）。
+    await api(`/api/collections/ss_shared/records/${it.id}`, { method: 'PATCH', body: JSON.stringify({ name }) });
+    closeSharedSheet(); loadShared().catch(() => {});
+  } catch (e) { $('#sharedErr').textContent = e.message; }
+};
+$('#sDel').onclick = async () => {
+  const b = $('#sDel'), it = S.manageShared;
+  if (!it) return;
+  if (!b.classList.contains('armed')) {
+    b.classList.add('armed');
+    b.textContent = '确认删除（各机器上已下载的不动）';
+    S.armTimer2 = setTimeout(disarmSharedDelete, 10000);
+    return;
+  }
+  disarmSharedDelete();
+  try {
+    await api(`/api/collections/ss_shared/records/${it.id}`, { method: 'DELETE' });
+    closeSharedSheet(); loadShared().catch(() => {});
+  } catch (e) { $('#sharedErr').textContent = e.message; }
+};
+
+$('#iShare').onclick = () => {
+  const it = S.manageItem;
+  if (!it) return;
+  closeItemSheet();
+  // 字节在 Mac 上，所以这是一条指令而不是一次网页上传。
+  cmd('share', { localPath: it.localPath, name: it.name });
+};
 
 $('#iCancel').onclick = closeItemSheet;
 $('#oCancel').onclick = closeOutSheet;
@@ -1964,7 +2143,7 @@ function connectRealtime() {
     S.retries = 0;
     await api('/api/realtime', { method: 'POST', body: JSON.stringify({
       clientId: JSON.parse(ev.data).clientId,
-      subscriptions: ['ss_players', 'ss_items', 'ss_schedules', 'ss_runs'] }) });
+      subscriptions: ['ss_players', 'ss_items', 'ss_schedules', 'ss_runs', 'ss_shared'] }) });
     setLink('已连接', 'ok');
     // 🔴 重连之后必须重新拉一遍。
     //
@@ -1984,6 +2163,7 @@ function connectRealtime() {
     renderChips(); renderNow();
   });
   es.addEventListener('ss_items', () => { if (S.sel) loadItems(); });
+  es.addEventListener('ss_shared', () => { loadShared().catch(() => {}); });
   es.addEventListener('ss_schedules', () => { if (S.sel) loadScheds(); });
   // 一次定时开播 / 收尾就是一行——收到就重读，规则卡上的「正在播」和「上次响没响」
   // 才会在事情发生的那一刻变，而不是等到下一次 45 秒轮询。
@@ -2003,6 +2183,9 @@ function setLink(text, kind) {
 function refreshAll() {
   if (!S.token) return;
   loadPlayers().catch(() => {});
+  // 订阅只送「从现在起」的事件：断开期间别的机器传上来的共享条目，
+  // 不在这里补读就永远不会出现——和成品列表同一个坑。
+  loadShared().catch(() => {});
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshAll(); });
 setInterval(refreshAll, 45000);
