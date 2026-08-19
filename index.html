@@ -411,6 +411,8 @@ nav svg{width:22px;height:22px;fill:currentColor}
             <button data-t="shared">共享</button>
           </div>
           <span id="itemCount" class="num" style="font-weight:400"></span>
+          <span style="flex:1"></span>
+          <button id="bFetch" class="mini" style="height:26px;min-width:0;padding:0 10px;font-size:12px">从链接…</button>
         </div>
         <div id="items"></div>
         <div id="shared" class="hide"></div>
@@ -505,6 +507,17 @@ nav svg{width:22px;height:22px;fill:currentColor}
   <button id="iShare" class="mini" style="width:100%;height:48px;font-size:15px;margin-top:8px">上传到共享</button>
   <button id="iDel" class="mini danger">从控制端移除</button>
   <button id="iCancel" class="ghost">取消</button>
+</div>
+
+<div id="fetchSheet" class="sheet hide">
+  <div class="grab"></div>
+  <h2>从链接抓音频</h2>
+  <div id="fTarget" class="sheetname"></div>
+  <input id="fLink" class="tinput" type="text" enterkeyhint="go" aria-label="链接"
+         placeholder="粘贴小红书分享口令，或视频直链">
+  <div id="fetchErr" class="err"></div>
+  <button id="fGo" class="primary">抓取</button>
+  <button id="fCancel" class="ghost">取消</button>
 </div>
 
 <div id="sharedSheet" class="sheet hide">
@@ -697,11 +710,14 @@ const canRoute = p => p && atLeast(p.appVersion, '0.27.0');
 // 上传到共享 / 下到这台机器都要 Mac 端执行（文件在它上面，网页手里没有字节）。
 // 0.29.0 之前收到 share/pull 会回「不认识的指令」，所以老机器上这两个按钮不给。
 const canShare = p => p && atLeast(p.appVersion, '0.29.0');
+// 抓链接由被控端自己下载（音频要落在它的盘上），老版本收到 fetch 会回「不认识的指令」。
+const canFetch = p => p && atLeast(p.appVersion, '0.30.0');
 
 /* 哪些功能要哪个版本 —— 新到旧。设备弹窗用它回答「这台差在哪」。
  * 🔴 加了新的版本卡点就往这里补一条，否则设备弹窗会说「一切正常」，
  * 而按钮那边照样是灰的，两处对不上比不说更糟。 */
 const FEATURES = [
+  { min: '0.30.0', name: '从链接抓音频' },
   { min: '0.29.0', name: '共享音频库' },
   { min: '0.27.0', name: '切输出设备 / 机器音量' },
   { min: '0.24.0', name: '接着上次往下播' },
@@ -1383,6 +1399,42 @@ function disarmDelete() {
   clearTimeout(S.armTimer);
 }
 
+/* 从链接抓音频：网页只发一条指令，下载由被控端自己做。
+ * 🔴 音频必须落在**要播它的那台机器**的盘上（定时和点播都读本地文件），
+ * 浏览器下完再传上去等于同样的字节搬两趟。 */
+function openFetchSheet() {
+  const p = current();
+  $('#fLink').value = '';
+  $('#fetchErr').textContent = '';
+  $('#fTarget').textContent = p ? `抓到 ${deviceName(p)}` : '先选一台设备';
+  const ok = canFetch(p);
+  $('#fGo').disabled = !ok;
+  $('#fGo').textContent = ok ? '抓取' : '抓取（设备需更新）';
+  $('#scrim').classList.remove('hide'); $('#fetchSheet').classList.remove('hide');
+  requestAnimationFrame(() => {
+    $('#scrim').classList.add('show'); $('#fetchSheet').classList.add('show');
+  });
+  setTimeout(() => $('#fLink').focus(), 340);
+}
+function closeFetchSheet() {
+  $('#scrim').classList.remove('show'); $('#fetchSheet').classList.remove('show');
+  setTimeout(() => { $('#scrim').classList.add('hide'); $('#fetchSheet').classList.add('hide'); }, 320);
+}
+$('#bFetch').onclick = openFetchSheet;
+$('#fCancel').onclick = closeFetchSheet;
+$('#fGo').onclick = () => {
+  const p = current(), link = $('#fLink').value.trim();
+  if (!canFetch(p)) {
+    $('#fetchErr').textContent =
+      `${deviceName(p)} 还是旧版（${p && p.appVersion || '?'}），升到 0.30.0 以上才能抓链接`;
+    return;
+  }
+  if (!link) { $('#fetchErr').textContent = '把整段分享口令粘进来就行'; return; }
+  closeFetchSheet();
+  cmd('fetch', { link });
+};
+$('#fLink').addEventListener('keydown', e => { if (e.key === 'Enter') $('#fGo').click(); });
+
 function openSharedSheet(it) {
   S.manageShared = it;
   $('#sName').value = it.name;
@@ -1476,6 +1528,11 @@ $('#iDel').onclick = () => {
 };
 
 /* ---------- 异步指令三态（3g） ---------- */
+/* 🔴 8 秒判死是按「点播放」定的。搬字节的指令不是那个量级：
+ * 抓链接要下完整段视频再分离音轨，共享要传/收整个文件。
+ * 用同一个期限的结果是机器干得好好的，控制端已经红字说它没回应。 */
+const CMD_LIMIT = { fetch: 180000, share: 120000, pull: 120000 };
+
 async function cmd(action, payload = {}) {
   if (!current()) return;
   clearTimeout(S.cmdTimer); clearTimeout(S.failTimer);
@@ -1485,11 +1542,11 @@ async function cmd(action, payload = {}) {
   try {
     const rec = await api('/api/collections/ss_commands/records', { method: 'POST',
       body: JSON.stringify({ player: S.sel, action, payload, status: 'pending' }) });
-    watch(rec.id);
+    watch(rec.id, CMD_LIMIT[action] || 8000);
   } catch (e) { fail(String(e.message || e)); }
 }
 
-function watch(id) {
+function watch(id, limit = 8000) {
   const began = Date.now();
   const tick = async () => {
     let rec;
@@ -1509,9 +1566,10 @@ function watch(id) {
     }
     // 心跳同时失鲜就不报指令失败——原因要指向真问题。
     if (!isLive(p)) { clearTimeout(S.cmdTimer); S.cmd = 'idle'; renderNow(); return; }
-    if (age > 8000) return fail('设备未回应');
+    if (age > limit) return fail('设备未回应');
     if (age > 3000) { clearTimeout(S.cmdTimer); S.cmd = 'slow'; renderNow(); }
-    setTimeout(tick, 400);
+    // 长任务别每 400 ms 问一次服务端：它要跑几十秒。
+    setTimeout(tick, limit > 8000 && age > 5000 ? 2000 : 400);
   };
   setTimeout(tick, 250);
 }
