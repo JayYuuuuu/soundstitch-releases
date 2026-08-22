@@ -1569,7 +1569,12 @@ $('#iDel').onclick = () => {
 /* 🔴 8 秒判死是按「点播放」定的。搬字节的指令不是那个量级：
  * 抓链接要下完整段视频再分离音轨，共享要传/收整个文件。
  * 用同一个期限的结果是机器干得好好的，控制端已经红字说它没回应。 */
-const CMD_LIMIT = { fetch: 180000, share: 120000, pull: 120000 };
+const CMD_LIMIT = { fetch: 180000, share: 120000, pull: 120000,
+                   /* 🔴 极短音效的回执是**故意**延后的：0.31.1 起 Mac 端会等 10 秒
+                    * 以内的素材播完再回执，好把「响了 N 次」写进结论里 —— 否则
+                    * 回执写在 play() 之后 0 ms，那时没有任何证据，而心跳要十几秒
+                    * 后才补上。最长 10+2 秒，留三秒余量给往返。 */
+                   play: 15000, load: 15000 };
 
 async function cmd(action, payload = {}) {
   if (!current()) return;
@@ -1618,7 +1623,10 @@ function watch(id, limit = 8000) {
     // 心跳同时失鲜就不报指令失败——原因要指向真问题。
     if (!isLive(p)) { clearTimeout(S.cmdTimer); S.cmd = 'idle'; renderNow(); return; }
     if (age > limit) return fail('设备未回应');
-    if (age > 3000) { clearTimeout(S.cmdTimer); S.cmd = 'slow'; renderNow(); }
+    // 「未回应」要跟着这条指令**该花多久**走。固定 3 秒的话，正在下载的 fetch、
+    // 正在等短音效播完的 play，都会在机器干得好好的时候被刷成橙字。
+    // 8 秒那档算出来还是 3 秒不到，所以普通指令的行为一点没变。
+    if (age > Math.max(3000, limit / 3)) { clearTimeout(S.cmdTimer); S.cmd = 'slow'; renderNow(); }
     // 长任务别每 400 ms 问一次服务端：它要跑几十秒。
     setTimeout(tick, limit > 8000 && age > 5000 ? 2000 : 400);
   };
