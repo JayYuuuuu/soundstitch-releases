@@ -565,7 +565,7 @@ const S = {
   players: [], items: [], scheds: [], runs: [], openHist: null, sel: null, selItem: null,
   logRule: '',
   tab: 'now', es: null, retries: 0, cmd: 'idle', failMsg: '', doneMsg: '', doneTimer: null,
-  cmdTimer: null, failTimer: null,
+  cmdTimer: null, failTimer: null, watch: null, watchTimer: null,
   manageItem: null, armTimer: null,
   itemTab: 'local', shared: [], manageShared: null, armTimer2: null, audio: null, auditioning: null,
   auditionErr: '', auditionErrID: null, auditionTimer: null,
@@ -1589,48 +1589,80 @@ async function cmd(action, payload = {}) {
   } catch (e) { fail(String(e.message || e)); }
 }
 
+/* 🔴 回执走 SSE，轮询退成兜底。
+ *
+ * 通道本来就在：控制端早就订了 ss_players / ss_items / ss_schedules / ss_runs /
+ * ss_shared，独独漏了 ss_commands —— 于是「这条指令办完了没有」是页面上唯一
+ * 还靠问出来的东西。0.31.1 把短音效的回执改成**等播完再写**之后，代价现身了：
+ * play 的期限是 15 秒，落进「长任务」那一档，5 秒后退到 2 秒一问，声音早停了
+ * 绿徽标还没出来。
+ *
+ * 🔴 **兜底不能删。** 两件事事件永远送不到：SSE 在 iOS 上会「看起来还连着」却
+ * 不送数据（和 45 秒慢轮询同一个理由），以及**一台不回应的机器什么都不会发** ——
+ * 「设备未回应」「连接中」只能靠自己数时间。所以轮询保留，只是节奏从 400 ms
+ * 放到 1.2 / 2.5 秒：它现在是保险，不是主路。 */
 function watch(id, limit = 8000) {
-  const began = Date.now();
+  // 同一时刻只跟一条：新指令直接顶掉旧的，否则先超时的那条会把后一条的转圈
+  // 也刷成红字。tick 每次醒来都核对自己还是不是当前那条。
+  clearTimeout(S.watchTimer);
+  S.watch = { id, limit, began: Date.now() };
   const tick = async () => {
+    if (!S.watch || S.watch.id !== id) return;
+    const age = Date.now() - S.watch.began;
     let rec;
     try { rec = await api('/api/collections/ss_commands/records/' + id); }
-    catch { return; }
-    if (rec.status === 'done') {
-      clearTimeout(S.cmdTimer);
-      // 🔴 以前 done 只是把转圈收掉，屏幕上什么也不说 —— 下载完了、或者
-      // 「本机已有同一份」这种最该看见的结论，全都只留在 ss_commands.result 里，
-      // 而那是没人会去翻的地方。成功和失败一样需要一句话。
-      S.doneMsg = rec.result || '';
-      S.cmd = S.doneMsg ? 'done' : 'idle';
-      renderNow();
-      clearTimeout(S.doneTimer);
-      if (S.doneMsg) S.doneTimer = setTimeout(() => {
-        if (S.cmd === 'done') { S.cmd = 'idle'; S.doneMsg = ''; renderNow(); }
-      }, 6000);
-      return;
-    }
-    if (rec.status === 'failed') return fail(rec.result || '执行失败');
-    const age = Date.now() - began;
+    // 网络抖一下不该让整条 watch 就此停住（转圈会一直挂在那儿）。接着数时间，
+    // 该判死的时候由下面那几条判。
+    catch { rec = null; }
+    if (rec && settleCommand(rec)) return;
     const p = current();
     // 🔴 连接中要接着等，别按 8 秒判死。Mac 端 0.26.5 起会在订阅成功后补读
     // 订阅前积压的指令（宽限 90 秒），所以这条命令多半马上就会被执行 ——
     // 以前这里报「设备未回应」，而机器好好的，只是通道还没建起来。
     if (isWaking(p)) {
       if (age < 95000) { clearTimeout(S.cmdTimer); S.cmd = 'idle'; renderNow();
-                         setTimeout(tick, 1000); return; }
-      return fail('设备一直没连上');
+                         S.watchTimer = setTimeout(tick, 1000); return; }
+      return giveUp(id, '设备一直没连上');
     }
     // 心跳同时失鲜就不报指令失败——原因要指向真问题。
-    if (!isLive(p)) { clearTimeout(S.cmdTimer); S.cmd = 'idle'; renderNow(); return; }
-    if (age > limit) return fail('设备未回应');
+    if (!isLive(p)) { clearTimeout(S.cmdTimer); S.cmd = 'idle'; renderNow(); S.watch = null; return; }
+    if (age > limit) return giveUp(id, '设备未回应');
     // 「未回应」要跟着这条指令**该花多久**走。固定 3 秒的话，正在下载的 fetch、
     // 正在等短音效播完的 play，都会在机器干得好好的时候被刷成橙字。
     // 8 秒那档算出来还是 3 秒不到，所以普通指令的行为一点没变。
     if (age > Math.max(3000, limit / 3)) { clearTimeout(S.cmdTimer); S.cmd = 'slow'; renderNow(); }
-    // 长任务别每 400 ms 问一次服务端：它要跑几十秒。
-    setTimeout(tick, limit > 8000 && age > 5000 ? 2000 : 400);
+    S.watchTimer = setTimeout(tick, age < 5000 ? 1200 : 2500);
   };
-  setTimeout(tick, 250);
+  S.watchTimer = setTimeout(tick, 600);
+}
+
+/* 指令到终态了就收尾。SSE 和兜底轮询都走这里——两条路一份逻辑，否则迟早分家，
+ * 而分家的那份恰好是不常走的那份。返回真 = 这条已经了结，别再跟了。 */
+function settleCommand(rec) {
+  if (!S.watch || !rec || rec.id !== S.watch.id) return false;
+  if (rec.status === 'done') {
+    S.watch = null; clearTimeout(S.watchTimer); clearTimeout(S.cmdTimer);
+    // 🔴 以前 done 只是把转圈收掉，屏幕上什么也不说 —— 下载完了、或者
+    // 「本机已有同一份」这种最该看见的结论，全都只留在 ss_commands.result 里，
+    // 而那是没人会去翻的地方。成功和失败一样需要一句话。
+    S.doneMsg = rec.result || '';
+    S.cmd = S.doneMsg ? 'done' : 'idle';
+    renderNow();
+    clearTimeout(S.doneTimer);
+    if (S.doneMsg) S.doneTimer = setTimeout(() => {
+      if (S.cmd === 'done') { S.cmd = 'idle'; S.doneMsg = ''; renderNow(); }
+    }, 6000);
+    return true;
+  }
+  if (rec.status === 'failed') { giveUp(rec.id, rec.result || '执行失败'); return true; }
+  return false;
+}
+
+/* 判死：停掉这条 watch 再报，免得已经红了的指令被下一拍轮询又摸一次。 */
+function giveUp(id, msg) {
+  if (S.watch && S.watch.id !== id) return;
+  S.watch = null; clearTimeout(S.watchTimer);
+  fail(msg);
 }
 
 function fail(msg) {
@@ -2309,7 +2341,8 @@ function connectRealtime() {
     S.retries = 0;
     await api('/api/realtime', { method: 'POST', body: JSON.stringify({
       clientId: JSON.parse(ev.data).clientId,
-      subscriptions: ['ss_players', 'ss_items', 'ss_schedules', 'ss_runs', 'ss_shared'] }) });
+      subscriptions: ['ss_players', 'ss_items', 'ss_schedules', 'ss_runs', 'ss_shared',
+                      'ss_commands'] }) });
     setLink('已连接', 'ok');
     // 🔴 重连之后必须重新拉一遍。
     //
@@ -2334,6 +2367,13 @@ function connectRealtime() {
   // 一次定时开播 / 收尾就是一行——收到就重读，规则卡上的「正在播」和「上次响没响」
   // 才会在事情发生的那一刻变，而不是等到下一次 45 秒轮询。
   es.addEventListener('ss_runs', () => { if (S.sel && S.tab !== 'now') loadScheds(); });
+  // 指令回执：Mac 一写 done/failed，徽标当场就变，不必等下一拍轮询。
+  // 🔴 收到的是**全账号**的指令（PB 的 realtime `?filter=` 实测不生效），
+  // 自己核对 id —— 和 Mac 端硬核对 player 是同一个道理。`settleCommand` 里判。
+  es.addEventListener('ss_commands', ev => {
+    const { action, record } = JSON.parse(ev.data);
+    if (action !== 'delete') settleCommand(record);
+  });
   es.onerror = () => setLink(`重连中 · 第 ${++S.retries} 次`, 'bt');
 }
 function setLink(text, kind) {
