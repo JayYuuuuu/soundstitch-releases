@@ -438,7 +438,7 @@ nav .ni{font-size:16px;line-height:1}
         试听在<b style="color:var(--t1)">你手上这台设备</b>响，不动被遥控的 Mac
       </div>
     </div>
-    <div class="pad scroll" id="itemScroll" style="flex:1;min-height:0;padding-top:8px;padding-bottom:170px">
+    <div class="pad scroll" id="itemScroll" style="flex:1;min-height:0;padding-top:8px;padding-bottom:190px">
       <div id="itemList"></div>
     </div>
   </main>
@@ -1490,9 +1490,13 @@ function renderNow() {
   } else if (p.state === 'idle') {
     evi.className = 'badge mut'; evi.textContent = '空闲'; evi.title = '还没装载任何成品';
   } else {
-    const [t, k] = soundVerdict(p);
-    evi.className = 'badge ' + ({ ok: 'ok', bad: 'bad', bt: 'warn' }[k] || 'mut');
-    evi.textContent = t; evi.title = p.note || '';
+    // 🔴 徽标只说**状态词**，次数和「多久前」在下面 pinmeta 那一行——两处印同一句话
+    // 会把标题挤没，而屏幕上重复一遍并不多给任何信息。压缩态没有 pinmeta，
+    // 那时才由徽标把数字带上。
+    const [t, k] = soundBadge(p, S.compact);
+    evi.className = 'badge ' + k;
+    evi.textContent = t;
+    evi.title = soundVerdict(p)[0] + (p.note ? ' · ' + p.note : '');
   }
 
   // 传输
@@ -1503,8 +1507,7 @@ function renderNow() {
   const n = p.soundCount || 0, since = p.silentFor ?? -1;
   $('#pinsound').innerHTML = free
     ? `${free.order === 'rand' ? '随机' : '轮播'} · 第 <b>${free.lap + 1}</b> 轮 · 剩 ${fmt(free.left)}`
-    : n > 0 ? `已响 <b>${n}</b> 次${since >= 0 ? ` · ${since < 60 ? Math.round(since) + ' 秒前'
-                : Math.round(since / 60) + ' 分前'}` : ''}`
+    : n > 0 ? `已响 <b>${n}</b> 次${since >= 0 ? ' · ' + ago(since) : ''}`
       : ended(p) ? '已播完' : playing ? '等待出声' : '未在播放';
   const out = p.outputDevice;
   $('#pinout').innerHTML = out
@@ -1514,6 +1517,26 @@ function renderNow() {
   renderVol(p);
   renderFab(free);
   if (S.tab === 'now') renderFreeQueue(free);
+}
+
+/* 一句状态词。展开态用它，压缩态把数字接上（那时下面那行是藏起来的）。 */
+function soundBadge(p, compact) {
+  const n = p.soundCount || 0, since = p.silentFor ?? -1;
+  if (ended(p)) return [compact && n ? `已播完 · 响 ${n}` : '已播完', 'mut'];
+  if (p.state !== 'playing') return ['已暂停', 'mut'];
+  if (p.audible) return ['有声 ' + meter(p.level), 'ok'];
+  if (!reportsCount(p)) return [p.note || '无声', 'warn'];
+  if (n > 0) return [compact ? `响 ${n} · ${ago(since)}` : '间隔中', 'ok'];
+  if ((p.playingFor || 0) < 120) return ['等待出声', 'mut'];
+  return [`播 ${Math.round((p.playingFor || 0) / 60)} 分没出过声`, 'bad'];
+}
+/* 「281 分前」没人换算得过来。分钟数一大就换单位。 */
+function ago(s) {
+  if (s < 0) return '';
+  if (s < 60) return Math.round(s) + ' 秒前';
+  if (s < 3600) return Math.round(s / 60) + ' 分前';
+  const h = s / 3600;
+  return (h < 10 ? h.toFixed(1) : Math.round(h)) + ' 小时前';
 }
 
 /* 音量：拖动时数字实时跟手但**不下发**，松手 250ms 后才发一次——
@@ -1528,7 +1551,7 @@ function renderVol(p) {
   $('#volNote').textContent = '此输出无音量控制';
   if (!S.volHeld) {
     const v = Math.round(readVolume(p) * 100);
-    input.value = v; $('#volFill').style.width = dead ? '0' : v + '%';
+    input.value = v; setFill(v, dead);
   }
   if (dead) { kind.className = 'badge mut'; kind.textContent = '无音量'; kind.title =
     '这个输出设备没有音量属性（实测 DisplayPort 显示器就是这样），系统设置里那根条也是灰的'; return; }
@@ -1538,8 +1561,15 @@ function renderVol(p) {
   kind.title = app ? '推的是声拼自己的增益，Mac 的音量条不会动（老版本或该输出没有硬件音量）'
                    : '推的是这台机器自己的音量，和在菜单栏里拖那根条完全同义';
 }
+/* 🔴 填充条要按 thumb 的**实际行程**算，不能直接用百分比。
+ * 原生 thumb 的中心从 14px 走到 (宽-14px)，而百分比宽度从 0 走到满宽——
+ * 两者只在 0% 和 50% 附近对得上，拖到头就会看到白圆钮浮在绿条外面。 */
+function setFill(v, dead) {
+  $('#volFill').style.width = dead ? '0'
+    : `calc(14px + (100% - 28px) * ${Math.max(0, Math.min(100, v)) / 100})`;
+}
 $('#vol').oninput = () => {
-  S.volHeld = true; $('#volFill').style.width = $('#vol').value + '%';
+  S.volHeld = true; setFill(+$('#vol').value, false);
   const p = current(); if (p) renderVol(p);
 };
 $('#vol').onchange = () => {
@@ -1555,6 +1585,10 @@ function onScroll(el) {
   S.compact = want;
   $('#pin').classList.toggle('compact', want);
   $('#fab').classList.toggle('small', want);
+  // 🔴 压缩会把「已响 N 次 · 多久前」那一行藏掉，而那时正是徽标要把数字接过来的
+  // 时刻。不在这里重算的话，它要等下一拍（最多 1 秒）才补上——恰好是屏幕上
+  // 什么都不说的那一秒。
+  renderNow();
 }
 $('#itemScroll').addEventListener('scroll', e => onScroll(e.target), { passive: true });
 
@@ -1614,6 +1648,10 @@ async function loadItems() {
   S.items = r.items || [];
   renderItems();
 }
+/* 🔴 生成的音效只有零点几秒，`m:ss` 会把它们**全部**读成 0:00 ——
+ * 一列全是 0:00 的行等于什么也没说（和 `Fmt.size` 那条整除坑同一种病）。
+ * 十秒以内改用带一位小数的秒。 */
+const dur = s => (s = +s || 0) <= 0 ? '时长未知' : s < 10 ? s.toFixed(1) + ' 秒' : fmt(s);
 const matchQ = (n, q) => !q || String(n || '').toLowerCase().includes(q.toLowerCase());
 const localItems = () => S.items.filter(i => matchQ(i.name, S.q));
 
@@ -1646,7 +1684,7 @@ function renderItems() {
     row.className = 'row' + (on ? ' on' : '');
     row.innerHTML = `<div class="ico">${on ? '▶' : ''}</div>
       <div class="mid"><div class="nm ell">${esc(it.name)}</div>
-        <div class="sub ell">${fmt(it.duration)} · ${size(it.fileSize)}${on ? ' · 正在播' : ''}</div></div>
+        <div class="sub ell">${dur(it.duration)} · ${size(it.fileSize)}${on ? ' · 正在播' : ''}</div></div>
       <button class="dots">⋯</button>`;
     row.querySelector('.mid').onclick = () => play(it);
     row.querySelector('.ico').onclick = () => play(it);
@@ -1714,7 +1752,7 @@ function renderShared() {
     const err = S.auditionErrID === it.id ? S.auditionErr : '';
     row.innerHTML = `<div class="ico">${playing ? '🎧' : ''}</div>
       <div class="mid"><div class="nm ell">${esc(it.name)}</div>
-        <div class="sub ell${err ? ' bad' : ''}">${err || (fmt(it.duration) + ' · ' + size(it.fileSize) +
+        <div class="sub ell${err ? ' bad' : ''}">${err || (dur(it.duration) + ' · ' + size(it.fileSize) +
           (playing ? ` · 在这台设备上播放 ${fmt(S.audio ? S.audio.currentTime : 0)}` : ''))}</div></div>
       <button class="mini">${playing ? '手机停' : '手机试听'}</button>
       <button class="mini ${had ? 'ok' : 'acc'}"${(had || !can) ? ' disabled' : ''}>${
@@ -1750,7 +1788,7 @@ function audition(it) {
   a.ontimeupdate = () => {
     const row = $('#itemList .row.on .sub');
     if (row && !S.auditionErr) row.textContent =
-      `${fmt(it.duration)} · ${size(it.fileSize)} · 在这台设备上播放 ${fmt(a.currentTime)}`;
+      `${dur(it.duration)} · ${size(it.fileSize)} · 在这台设备上播放 ${fmt(a.currentTime)}`;
   };
   a.play().catch(() => auditionFailed(it.id,
     a.error ? '这个文件放不出来' : '浏览器拦下了自动播放，再点一次'));
@@ -1882,7 +1920,7 @@ function renderFP() {
     row.className = 'pickrow' + (p ? ' on' : '');
     row.innerHTML = `<div class="ord">${p ? idx + 1 : ''}</div>
       <div class="mid"><div class="nm ell">${esc(it.name)}</div>
-        <div class="sub">${fmt(it.duration)} · ${size(it.fileSize)}</div></div>
+        <div class="sub">${dur(it.duration)} · ${size(it.fileSize)}</div></div>
       <div class="step"><button ${p ? '' : 'disabled'}>−</button><span>${p ? p.n : 1}</span>
         <button ${p ? '' : 'disabled'}>+</button></div>`;
     row.querySelector('.mid').onclick = () => fpToggle(it.id);
@@ -2216,7 +2254,7 @@ function syncRule() {
         color:#fff;font-size:12px;font-weight:700;display:flex;align-items:center;
         justify-content:center;font-family:var(--mono)">${i + 1}</div>
       <div class="ell" style="flex:1;font-size:15px">${esc(it.name)}</div>
-      <div class="mono" style="font-size:12px;color:var(--t2)">×${p.n} · ${fmt(it.duration)}</div></div>`;
+      <div class="mono" style="font-size:12px;color:var(--t2)">×${p.n} · ${dur(it.duration)}</div></div>`;
   }).join('') : `<div style="font-size:13px;color:var(--t3)">还没选，点右上角挑几条</div>`;
   // 数值行
   const nums = NUMS.filter(n => n.k !== 'rep' || F.mode === 'daily')
@@ -2328,7 +2366,7 @@ function renderPick() {
     row.className = 'pickrow' + (p ? ' on' : '');
     row.innerHTML = `<div class="ord">${p ? idx + 1 : ''}</div>
       <div class="mid"><div class="nm ell">${esc(it.name)}</div>
-        <div class="sub">${fmt(it.duration)} · ${size(it.fileSize)}</div></div>
+        <div class="sub">${dur(it.duration)} · ${size(it.fileSize)}</div></div>
       <div class="step"><button ${p ? '' : 'disabled'}>−</button><span>${p ? p.n : 1}</span>
         <button ${p ? '' : 'disabled'}>+</button></div>`;
     row.querySelector('.mid').onclick = () => {
