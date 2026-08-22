@@ -1415,6 +1415,7 @@ function renderChips() {
 
 function select(id) {
   if (S.sel === id) return;
+  $('#itemScroll').scrollTop = 0; setPin(false);
   S.sel = id; S.items = []; S.scheds = []; S.runs = []; S.selItem = null;
   S.openRow = null; S.pos = null;
   renderChips(); renderNow(); renderItems(); renderRules(); renderLog();
@@ -1601,16 +1602,43 @@ $('#vol').onchange = () => {
 };
 
 /* 滚动就压缩（A1）。压缩后暂停、音量、后退 15 秒全都还在，不必滚回顶部。 */
+/* 🔴 压缩会让清单容器**变高约 94px**，于是浏览器把 scrollTop 往回夹；夹过阈值
+ * 就展开，展开又变矮、scrollTop 又能变大、再次越线……**单阈值 + 布局联动 =
+ * 一个自激振荡器**。用户报的「滚到底之后清单卡死、要卡很久」就是它：主线程一直
+ * 在压缩/展开之间空转，触摸事件挤不进来（切设备把滚动位置清零才断得开）。
+ *
+ * 三条一起才断干净，缺一条都还会回来：
+ *   ① **迟滞**：压缩看 >24，展开看 <8，中间那段谁也不碰
+ *   ② **内容不够长就根本不压**：压完还得剩下滚动余量，否则压缩会把自己取消掉
+ *      （短清单本来也没什么可让位的，不压是对的）
+ *   ③ 改类和重绘都进 rAF，外加一个冷却窗——别在 scroll 回调里同步改布局 */
+const PIN_DELTA = 94;            // 展开 195 → 压缩 101，实测差值
+let pinBusy = 0;
 function onScroll(el) {
-  const want = el.scrollTop > 24;
+  if (Date.now() < pinBusy) return;
+  const top = el.scrollTop, room = el.scrollHeight - el.clientHeight;
+  let want = S.compact;
+  if (!S.compact) { if (top > 24 && room > PIN_DELTA + 36) want = true; }
+  else if (top < 8) want = false;
   if (want === S.compact) return;
+  setPin(want);
+}
+function setPin(want) {
   S.compact = want;
-  $('#pin').classList.toggle('compact', want);
-  $('#fab').classList.toggle('small', want);
-  // 🔴 压缩会把「已响 N 次 · 多久前」那一行藏掉，而那时正是徽标要把数字接过来的
-  // 时刻。不在这里重算的话，它要等下一拍（最多 1 秒）才补上——恰好是屏幕上
-  // 什么都不说的那一秒。
-  renderNow();
+  pinBusy = Date.now() + 260;    // 比 180ms 的过渡长一点
+  requestAnimationFrame(() => {
+    $('#pin').classList.toggle('compact', want);
+    $('#fab').classList.toggle('small', want);
+    // 压缩会把「已响 N 次 · 多久前」那行藏掉，徽标要当场把数字接过来——
+    // 不在这里重算的话它要等下一拍（最多 1 秒），恰好是屏幕上什么都不说的那一秒。
+    renderNow();
+  });
+}
+/* 清单变短了（切设备、搜索过滤、拉完一批）就把卡放回来：留着压缩态而没有
+   可滚的内容，等于白占着那 94px 又没人能把它滚回去。 */
+function syncPin() {
+  const el = $('#itemScroll');
+  if (S.compact && el.scrollHeight - el.clientHeight < 24) setPin(false);
 }
 $('#itemScroll').addEventListener('scroll', e => onScroll(e.target), { passive: true });
 
@@ -1698,6 +1726,7 @@ function renderItems() {
   }
   const rows = localItems();
   box.innerHTML = '<div class="list"></div>';
+  requestAnimationFrame(syncPin);
   const list = box.firstElementChild;
   if (!rows.length) { list.innerHTML = `<div class="empty"><div class="h">没有匹配的素材</div></div>`; return; }
   for (const it of rows) {
@@ -1742,7 +1771,11 @@ function renameItem(it) {
 }
 const play = it => { S.selItem = it.id; S.openRow = null;
   cmd('play', { localPath: it.localPath, name: it.name, itemId: it.id }); };
-function switchItemTab(t) { S.itemTab = t; S.openRow = null; S.q = ''; $('#q').value = ''; renderItems(); }
+function switchItemTab(t) {
+  S.itemTab = t; S.openRow = null; S.q = ''; $('#q').value = '';
+  // 换栏 = 换一份长度完全不同的清单，压缩态未必还站得住
+  $('#itemScroll').scrollTop = 0; renderItems(); setPin(false);
+}
 $$('#itemTabs button').forEach(b => b.onclick = () => switchItemTab(b.dataset.t));
 $('#q').oninput = e => { S.q = e.target.value; renderItems(); };
 
