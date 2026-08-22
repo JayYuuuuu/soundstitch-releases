@@ -97,29 +97,35 @@ input{font:inherit;color:inherit}
  * 不需要滚回顶部。 */
 #pin{flex:none;transition:padding .18s ease-out}
 #pin .pincard{margin:12px 14px 0;background:var(--card);border-radius:18px;
-              box-shadow:var(--shadow);padding:14px 16px 15px;
-              display:flex;flex-direction:column;gap:13px}
+              box-shadow:var(--shadow);padding:16px 20px 18px;
+              display:flex;flex-direction:column;gap:14px}
 #pinhead{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
 #pintitle{font-size:18px;font-weight:600;letter-spacing:-.01em}
 #pinsub{font-size:12px;color:var(--t2);font-family:var(--mono)}
 .track{height:4px;border-radius:2px;background:var(--fill);overflow:hidden}
 .track>i{display:block;height:100%;background:var(--accent);border-radius:2px;
          transition:width 1s linear}
-#transport{display:flex;align-items:center;gap:14px}
+#pinwrap{display:flex;flex-direction:column;gap:16px}
+/* 进度条两端内缩一点：满宽顶到卡片内边距时，看起来像贴在边上。 */
+#pinbar{margin:2px 2px 0}
+#transport{display:flex;align-items:center;gap:16px}
+/* 后退 15 秒：弧形箭头包着数字，是这个动作的通用符号。
+ * 「↺15」在真机上没人认出来——用户直接问「播放按钮旁边那个是什么按钮」。 */
 .tbtn{width:52px;height:52px;border-radius:26px;background:var(--card2);display:flex;
-      align-items:center;justify-content:center;flex:none;font-size:11px;font-weight:600;
-      font-family:var(--mono)}
+      align-items:center;justify-content:center;flex:none;color:var(--t1)}
+.tbtn svg{width:26px;height:26px}
+#pin.compact .tbtn svg{width:21px;height:21px}
 #bPlay{width:64px;height:64px;border-radius:32px;background:var(--accent);
        box-shadow:0 4px 14px rgba(10,108,255,.35);display:flex;align-items:center;
        justify-content:center;flex:none;gap:5px;color:#fff;font-size:22px}
 #bPlay[disabled]{background:var(--fill);color:var(--t3);box-shadow:none}
 #pinmeta{flex:1;display:flex;flex-direction:column;gap:4px;min-width:0;font-size:12px;color:var(--t2)}
 #pinmeta b{color:var(--t1);font-family:var(--mono)}
-.volrow{display:flex;align-items:center;gap:11px}
+.volrow{display:flex;align-items:center;gap:12px;padding:0 2px}
 .volrow .sl{flex:1;min-width:0}
 
 /* 压缩态：84px 常驻条 */
-#pin.compact .pincard{margin:6px 14px 0;padding:6px 12px 8px;gap:6px;border-radius:14px;
+#pin.compact .pincard{margin:6px 14px 0;padding:6px 12px 8px!important;gap:6px;border-radius:14px;
                       background:var(--pinbg);backdrop-filter:blur(12px);
                       box-shadow:0 4px 14px rgba(0,0,0,.05)}
 #pin.compact #pinhead{align-items:center;gap:8px}
@@ -133,6 +139,7 @@ input{font:inherit;color:inherit}
 #pin.compact #bPlay{width:44px;height:44px;font-size:17px;box-shadow:none}
 #pin.compact #pinmeta{display:none}
 #pin.compact #pinwrap{display:flex;flex-direction:column;gap:6px}
+#pin.compact #pinbar{margin:0}
 #pin.compact #row2{display:flex;align-items:center;gap:10px}
 #pin.compact .volrow{flex:1;min-width:0}
 #pin.compact .track{height:3px}
@@ -169,7 +176,11 @@ input{font:inherit;color:inherit}
 .sw.on{background:var(--ok)}
 .sw.on>i{transform:translateX(20px)}
 .sl{height:28px;display:flex;align-items:center;position:relative}
-.sl>input{-webkit-appearance:none;appearance:none;width:100%;height:28px;background:none;margin:0}
+/* 🔴 滑钮必须压在填充条**上面**。`<b>` 是绝对定位，同层级下它会画在静态流的
+ * input 之后——于是音量拖到 0 时，那 14px 的填充正好糊在白圆钮脸上，
+ * 看起来像「还有一半音量没调下去」。用户就是这么报的。 */
+.sl>input{-webkit-appearance:none;appearance:none;width:100%;height:28px;background:none;margin:0;
+          position:relative;z-index:1}
 .sl>input::-webkit-slider-runnable-track{height:5px;border-radius:3px;background:var(--fill)}
 .sl>input::-webkit-slider-thumb{-webkit-appearance:none;width:28px;height:28px;border-radius:14px;
   background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.28);margin-top:-11.5px}
@@ -399,7 +410,16 @@ nav .ni{font-size:16px;line-height:1}
         <div id="pinbar" class="track"><i style="width:0"></i></div>
         <div id="row2">
           <div id="transport">
-            <button class="tbtn" id="bBack">↺15</button>
+            <button class="tbtn" id="bBack" title="后退 15 秒" aria-label="后退 15 秒">
+              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <circle cx="12" cy="13.4" r="7.2" stroke="currentColor" stroke-width="1.7"
+                        stroke-linecap="round" stroke-dasharray="35.5 9.7"
+                        transform="rotate(-48 12 13.4)"/>
+                <path d="M12.2 3.1 9.4 5.4l2.8 2.3" stroke="currentColor" stroke-width="1.7"
+                      stroke-linecap="round" stroke-linejoin="round"/>
+                <text x="12" y="16.7" text-anchor="middle" font-size="8.4"
+                      font-weight="700" fill="currentColor"
+                      font-family="-apple-system,system-ui,sans-serif">15</text></svg></button>
             <button id="bPlay">▶</button>
             <div id="pinmeta">
               <div id="pinsound">等待出声</div>
@@ -1565,8 +1585,10 @@ function renderVol(p) {
  * 原生 thumb 的中心从 14px 走到 (宽-14px)，而百分比宽度从 0 走到满宽——
  * 两者只在 0% 和 50% 附近对得上，拖到头就会看到白圆钮浮在绿条外面。 */
 function setFill(v, dead) {
-  $('#volFill').style.width = dead ? '0'
-    : `calc(14px + (100% - 28px) * ${Math.max(0, Math.min(100, v)) / 100})`;
+  v = Math.max(0, Math.min(100, v));
+  // 0 就是 0：一点绿都不该剩，否则「调到底了没有」得靠猜。
+  $('#volFill').style.width = (dead || v === 0) ? '0'
+    : `calc(14px + (100% - 28px) * ${v / 100})`;
 }
 $('#vol').oninput = () => {
   S.volHeld = true; setFill(+$('#vol').value, false);
