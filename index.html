@@ -224,8 +224,11 @@ main{flex:1;min-height:0;display:flex;flex-direction:column}
 .row:last-child{border-bottom:0}
 .row.on{background:color-mix(in srgb,var(--accent) 6%,transparent)}
 .row .ico{width:32px;height:32px;border-radius:9px;background:var(--fill);flex:none;
-          display:flex;align-items:center;justify-content:center;color:var(--accent);font-size:13px}
-.row.on .ico{background:color-mix(in srgb,var(--accent) 16%,transparent)}
+          display:flex;align-items:center;justify-content:center;color:var(--t3)}
+.row .ico svg{width:12px;height:14px;fill:currentColor}
+.row .ico.live{background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--accent)}
+.row .ico.wait{background:color-mix(in srgb,var(--accent) 10%,transparent);color:var(--accent)}
+.row .ico .spinner{width:14px;height:14px}
 .row .mid{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
 .row .nm{font-size:15px}
 .row.on .nm{font-weight:600}
@@ -1345,7 +1348,7 @@ const S = {
   watch: null, watchTimer: null,
   openRow: null, q: '', pos: null, volHeld: false, volPending: null,
   audio: null, auditioning: null, auditionErr: '', auditionErrID: null, auditionTimer: null,
-  devTarget: null, compact: false, endMode: null, openHist: null,
+  devTarget: null, compact: false, endMode: null, openHist: null, itemSig: null,
 };
 
 /* ---------- 登录 ---------- */
@@ -1500,10 +1503,18 @@ function renderNow() {
   if (!p) { title.textContent = '还没有设备'; sub.textContent = '在 Mac 上打开「连接控制端」';
             evi.className = 'badge mut'; evi.textContent = '—'; $('#bPlay').disabled = true; return; }
 
+  // 🔴 列表的高亮读的是 `p.currentItem`，而列表只在「清单本身变了」时才重绘
+  // （`ss_players` 事件只调 renderChips + renderNow）——于是换一条播放之后，
+  // 钉住卡换了、列表还停在上一条，写着「正在播」。**跟着值走，不跟着调用点走。**
+  const sig = `${p.currentItem}|${p.state}`;
+  if (sig !== S.itemSig) { S.itemSig = sig; if (S.tab === 'now') renderItems(); }
+
   const d = p.duration || 0, at = shownPosition(p, d);
   title.textContent = p.currentName || '还没装载';
   title.title = p.currentName || '';
-  sub.textContent = `${fmt(at)} / ${fmt(d)}`;
+  // 0.8 秒的音效在这儿也一样不能读成 `0:00 / 0:00`（和清单同一个坑）
+  sub.textContent = d > 0 && d < 10
+    ? `${at.toFixed(1)} / ${d.toFixed(1)} 秒` : `${fmt(at)} / ${fmt(d)}`;
   $('#pinbar').firstElementChild.style.width = d ? Math.min(100, at / d * 100) + '%' : '0';
 
   // 出声证据（A10 四态）。指令回执优先——它是刚刚按下那一下的结论。
@@ -1695,6 +1706,8 @@ $('#bBack').onclick = () => {
 
 function fail(msg) {
   clearTimeout(S.cmdTimer);
+  // 没成的那一下别让行一直转圈——转圈的意思是「还在路上」，而它已经不在了
+  S.selItem = null; S.itemSig = null;
   S.cmd = 'fail'; S.failMsg = msg; renderNow();
   S.failTimer = setTimeout(() => { S.cmd = 'idle'; renderNow(); }, 3000);
 }
@@ -1711,6 +1724,9 @@ async function loadItems() {
  * 一列全是 0:00 的行等于什么也没说（和 `Fmt.size` 那条整除坑同一种病）。
  * 十秒以内改用带一位小数的秒。 */
 const dur = s => (s = +s || 0) <= 0 ? '时长未知' : s < 10 ? s.toFixed(1) + ' 秒' : fmt(s);
+const PLAY_TRI = '<svg viewBox="0 0 12 14" aria-hidden="true"><path d="M1 1.2 11 7 1 12.8Z"/></svg>';
+/* 这一条现在到底是什么状态——播完了还写「正在播」就是在撒谎。 */
+const playWord = p => p.state === 'playing' ? '正在播' : ended(p) ? '已播完' : '已暂停';
 const matchQ = (n, q) => !q || String(n || '').toLowerCase().includes(q.toLowerCase());
 const localItems = () => S.items.filter(i => matchQ(i.name, S.q));
 
@@ -1739,12 +1755,17 @@ function renderItems() {
   const list = box.firstElementChild;
   if (!rows.length) { list.innerHTML = `<div class="empty"><div class="h">没有匹配的素材</div></div>`; return; }
   for (const it of rows) {
+    // 🔴 空白方块不会告诉人「点我能播」。每一行都画三角，靠**颜色**分三态：
+    // 灰 = 可以点 / 蓝底蓝三角 = 这条是机器上装着的 / 蓝底转圈 = 刚点下还没回话。
     const on = p && p.currentItem === it.id;
+    const wait = !on && S.selItem === it.id;      // 点了，机器还没确认
     const row = document.createElement('div');
-    row.className = 'row' + (on ? ' on' : '');
-    row.innerHTML = `<div class="ico">${on ? '▶' : ''}</div>
+    row.className = 'row' + (on || wait ? ' on' : '');
+    row.innerHTML = `<div class="ico${on ? ' live' : wait ? ' wait' : ''}">${
+        wait ? '<i class="spinner"></i>' : PLAY_TRI}</div>
       <div class="mid"><div class="nm ell">${esc(it.name)}</div>
-        <div class="sub ell">${dur(it.duration)} · ${size(it.fileSize)}${on ? ' · 正在播' : ''}</div></div>
+        <div class="sub ell">${dur(it.duration)} · ${size(it.fileSize)}${
+          on ? ' · ' + playWord(p) : wait ? ' · 下发中' : ''}</div></div>
       <button class="dots">⋯</button>`;
     row.querySelector('.mid').onclick = () => play(it);
     row.querySelector('.ico').onclick = () => play(it);
@@ -1778,8 +1799,13 @@ function renameItem(it) {
   if (name && name.trim() && name !== it.name)
     cmd('rename', { itemId: it.id, localPath: it.localPath, name: name.trim() });
 }
-const play = it => { S.selItem = it.id; S.openRow = null;
-  cmd('play', { localPath: it.localPath, name: it.name, itemId: it.id }); };
+/* 点下去到出声之间有实测 0.9 秒（蓝牙唤醒），所以那一刻就得给反馈——
+   等服务端确认再变色，中间那一秒屏幕上什么都没发生。 */
+const play = it => {
+  S.selItem = it.id; S.openRow = null;
+  renderItems();
+  cmd('play', { localPath: it.localPath, name: it.name, itemId: it.id });
+};
 function switchItemTab(t) {
   S.itemTab = t; S.openRow = null; S.q = ''; $('#q').value = '';
   // 换栏 = 换一份长度完全不同的清单，压缩态未必还站得住
