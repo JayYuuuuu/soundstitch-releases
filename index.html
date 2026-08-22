@@ -332,6 +332,15 @@ nav .ni{font-size:16px;line-height:1}
 .pickrow .mid{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
 .pickrow .nm{font-size:15px;font-weight:600}
 .pickrow .sub{font-size:11px;color:var(--t2);font-family:var(--mono)}
+/* 24 小时带子：把「什么时候响」变成一个位置问题。规则卡上 16px，编辑表单里 44px，
+   里面的块是同一份 `stripBlocks()` 画的——两处各画一遍必然分家。 */
+.strip{position:relative;height:16px;border-radius:5px;background:var(--fill);overflow:hidden}
+.strip>b,.lane>b{position:absolute;top:2px;bottom:2px;background:var(--accent);
+                 border-radius:2px;min-width:2px}
+.strip>b.once,.lane>b.once{background:var(--once)}
+.strip>u,.lane>u.now{position:absolute;top:0;bottom:0;width:2px;background:var(--bad);
+                     left:0;right:auto;display:block;padding:0}
+.lane>b{top:8px;bottom:14px}
 .lane{height:44px;border-radius:10px;background:var(--fill);position:relative;overflow:hidden}
 .lane>i{position:absolute;top:8px;bottom:8px;border-radius:3px;background:var(--accent)}
 .lane>u{position:absolute;left:0;right:0;bottom:2px;display:flex;justify-content:space-between;
@@ -2135,7 +2144,15 @@ async function loadScheds() {
   renderRules(); renderLog(); renderNow();
 }
 
-const ruleTitle = s => isFree(s) ? '自由排 · ' + ruleHead(s) : (ruleItems(s) || ruleHead(s));
+/* 🔴 `items` 是**展开**的（播 2 遍就是两条），照搬 v1 的 ruleItems 会念成
+   「顿击.wav → 顿击.wav +1」。规则卡上要的是**去重后**的内容概要。
+   v1 那个 ruleItems 留着不动——日志筛选条还在用它，而且它是搬过来的那一份。 */
+function ruleContent(s) {
+  const list = Array.isArray(s.items) && s.items.length
+    ? countTags(s.items) : (s.itemName ? [s.itemName] : []);
+  return list.join(' → ');
+}
+const ruleTitle = s => isFree(s) ? '自由排 · ' + ruleHead(s) : (ruleContent(s) || ruleHead(s));
 
 function renderRules() {
   const box = $('#ruleList'), p = current();
@@ -2153,17 +2170,19 @@ function renderRules() {
   }
   box.innerHTML = '';
   for (const s of list) {
-    const f = nextFire(s), [bt, bk] = ruleBadge(s, f, p), [lt, lk] = lastRunLine(s.id);
+    const f = nextFire(s), [lt, lk] = lastRunLine(s.id);
+    // 停用是用户自己按的，不是「不会再响」那种坏消息
+    const [bt, bk] = s.enabled ? ruleBadge(s, f, p) : ['已停用', ''];
     const el = document.createElement('div');
     el.className = 'rule' + (s.enabled ? '' : ' offd');
     const inWin = liveTake(s) && canPause(p) && s.enabled;
-    const tags = (s.items || []).length > 1 ? countTags(s.items) : [];
     el.innerHTML = `<div class="body">
         <div class="top"><div class="ell" style="min-width:0">
-            <div class="nm ell">${esc(ruleTitle(s))}</div>
-            <div class="when ell">${esc(ruleWhen(s))}</div></div>
+            <div class="nm ell" title="${esc(ruleContent(s))}">${esc(ruleTitle(s))}</div>
+            <div class="when ell" title="${esc(ruleWhen(s))}">${esc(ruleWhen(s))}</div></div>
           <span class="badge ${({ ok: 'ok', bad: 'bad', bt: 'warn' }[bk]) || 'mut'}">${esc(bt)}</span></div>
-        ${tags.length ? `<div class="tags">${tags.map(t => `<span>${esc(t)}</span>`).join('')}</div>` : ''}
+        <div class="strip" title="一天 24 小时里这条规则的真实落点（含波动）；红线是此刻">${
+          stripBlocks(s)}</div>
         <div class="acts">
           <button class="btn sm">${s.enabled ? '编辑' : '启用'}</button>
           <button class="btn sm">${s.enabled ? '停用' : '删除'}</button>
@@ -2192,11 +2211,52 @@ function countTags(items) {
   return out.slice(0, 3).map(x => x.name + (x.n > 1 ? ` ×${x.n}` : ''))
     .concat(out.length > 3 ? [`+${out.length - 3}`] : []);
 }
+/* 🔴 画的是**含波动的真实落点**，不是名义网格——画成等间距等于把「间隔不规律」
+   这件事又藏起来一次，而那正是这个 App 存在的理由。红线是此刻。 */
+function stripBlocks(s) {
+  const pct = m => m / 14.4;                       // 一天 1440 分钟 → 百分比
+  const start = hhmm(s.startTime) ?? 0;
+  const cls = s.mode === 'once' ? ' class="once"' : '';
+  const split = s.mode === 'window' && (s.playSeconds || 0) > 0;
+  let out = '';
+  if (s.mode === 'window' && !split) {
+    // 时段内不分次 = 整段循环，画成一整条；跨午夜切两段
+    const end = hhmm(s.endTime) ?? start;
+    out = end > start
+      ? `<b${cls} style="left:${pct(start)}%;width:${pct(end - start)}%"></b>`
+      : `<b${cls} style="left:${pct(start)}%;right:0"></b><b${cls} style="left:0;width:${pct(end)}%"></b>`;
+  } else {
+    // 星期清空：这条规则**响起来长什么样**和今天是不是它的日子无关，
+    // 带着星期算会在非执行日画成空条（和 windowRounds 同一个理由）。
+    const sl = takeSlots({ ...s, enabled: true, weekdays: [], localPath: s.localPath || '/x' });
+    const wide = Math.max(0.4, pct((s.playSeconds || 60) / 60));   // 宽度按时长，不是死 2px
+    const at = sl ? sl.at : [0];
+    for (let i = 0; i < at.length && i < 120; i++)
+      out += `<b${cls} style="left:${pct(start + at[i] / 60)}%;width:${wide}%"></b>`;
+  }
+  return out + `<u class="now" style="left:${pct(cnParts(new Date()).minutes)}%"></u>`;
+}
+
+/* 「周一周二周三周四周五」念不动。连着的收成区间，常见组合直接给名字。 */
+function weekLabel(w) {
+  const d = [...new Set(w || [])].sort((a, b) => a - b);
+  if (!d.length || d.length === 7) return '每天';
+  const key = d.join(',');
+  if (key === '2,3,4,5,6') return '工作日';
+  if (key === '1,7') return '周末';
+  const runs = [];
+  for (const x of d) {
+    const last = runs[runs.length - 1];
+    if (last && x === last[1] + 1) last[1] = x; else runs.push([x, x]);
+  }
+  return runs.map(([a, b]) => b > a + 1 ? `周${DAYS[a - 1]}至周${DAYS[b - 1]}`
+    : b > a ? `周${DAYS[a - 1]}周${DAYS[b - 1]}` : `周${DAYS[a - 1]}`).join('、');
+}
+
 function ruleWhen(s) {
   if (isFree(s)) return `${s.startTime} 起 ${fmt(s.playSeconds)} · ${
     String(s.endTime).includes('随机') ? '随机' : '轮播'}`;
-  const days = !s.weekdays || !s.weekdays.length || s.weekdays.length === 7 ? '每天'
-    : s.weekdays.map(d => '周' + DAYS[d - 1]).join('');
+  const days = weekLabel(s.weekdays);
   const head = s.mode === 'window' ? `${s.startTime}–${s.endTime}`
              : s.mode === 'once' ? `${(s.date || '').slice(5)} ${s.startTime}` : s.startTime;
   const each = s.playSeconds > 0 ? ` · 每次 ${fmt(s.playSeconds)}` : '';
@@ -2339,10 +2399,8 @@ function syncRule() {
   // 24 小时落点
   const d = draftRule();
   const sl = takeSlots({ ...d, weekdays: [] });
-  $('#rLane').innerHTML = (sl ? sl.at.slice(0, 400).map(a => {
-    const mins = (hhmm(d.startTime) || 0) + a / 60;
-    return `<i style="left:${Math.min(99, mins / 1440 * 100)}%;width:2px;top:8px;bottom:14px"></i>`;
-  }).join('') : '') + `<u><span>00</span><span>06</span><span>12</span><span>18</span><span>24</span></u>`;
+  $('#rLane').innerHTML = stripBlocks(d) +
+    `<u><span>00</span><span>06</span><span>12</span><span>18</span><span>24</span></u>`;
   // 结论行
   const [t, k] = ruleConcl(d, sl);
   const c = $('#ruleConcl'); c.textContent = t; c.className = 'concl ' + k;
