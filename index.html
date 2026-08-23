@@ -107,7 +107,23 @@ input{font:inherit;color:inherit}
          transition:width 1s linear}
 #pinwrap{display:flex;flex-direction:column;gap:16px}
 /* 进度条两端内缩一点：满宽顶到卡片内边距时，看起来像贴在边上。 */
-#pinbar{margin:2px 2px 0}
+#seekwrap{margin:2px 2px 0;position:relative}
+/* 🔴 4px 高的东西谁也拖不准，所以命中区是一层 32px 的**绝对定位覆盖层**，
+ * 不占布局高度 —— 钉住卡的两个高度（展开 195 / 压缩 101）是量着定的，
+ * 让进度条真长高 28px 会把压缩那档一起顶走。 */
+#seekwrap>input{position:absolute;left:0;width:100%;height:32px;top:50%;
+  transform:translateY(-50%);-webkit-appearance:none;appearance:none;
+  background:none;margin:0;z-index:1;touch-action:none}
+#seekwrap>input::-webkit-slider-runnable-track{height:32px;background:none;border:0}
+#seekwrap>input::-webkit-slider-thumb{-webkit-appearance:none;width:13px;height:13px;
+  border-radius:7px;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.32);margin-top:9.5px}
+#seekwrap>input::-moz-range-track{height:32px;background:none;border:0}
+#seekwrap>input::-moz-range-thumb{width:13px;height:13px;border:0;border-radius:7px;
+  background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.32)}
+/* 拖不了就别摆一个拖不动的钮：白圆点还在原地，等于说「你可以拖」。 */
+#seekwrap>input:disabled{pointer-events:none;opacity:0}
+/* 拖的时候填充要跟着手指走，1 秒的过渡会拖出一条尾巴。 */
+#pinbar.held>i{transition:none}
 #transport{display:flex;align-items:center;gap:16px}
 /* 后退 15 秒：弧形箭头包着数字，是这个动作的通用符号。
  * 「↺15」在真机上没人认出来——用户直接问「播放按钮旁边那个是什么按钮」。 */
@@ -139,7 +155,10 @@ input{font:inherit;color:inherit}
 #pin.compact #bPlay{width:44px;height:44px;font-size:17px;box-shadow:none}
 #pin.compact #pinmeta{display:none}
 #pin.compact #pinwrap{display:flex;flex-direction:column;gap:6px}
-#pin.compact #pinbar{margin:0}
+#pin.compact #seekwrap{margin:0}
+/* 🔴 压缩态的命中区只向**上**长。往下 6px 就是播放按钮的顶边——拿最常按的
+ * 那个键去换一个更好拖的进度条不划算。上面是标题和时间，点它们本来没有动作。 */
+#pin.compact #seekwrap>input{height:20px;top:auto;bottom:-4px;transform:none}
 #pin.compact #row2{display:flex;align-items:center;gap:10px}
 #pin.compact .volrow{flex:1;min-width:0}
 #pin.compact .track{height:3px}
@@ -394,7 +413,7 @@ nav .ni{font-size:16px;line-height:1}
   #pin .pincard{flex-direction:row;align-items:center;gap:22px;padding:14px 20px}
   #pin #pinwrap{flex:1;display:flex;align-items:center;gap:22px;min-width:0}
   #pin #pinhead{flex-direction:column;align-items:flex-start;gap:6px;width:300px;flex:none}
-  #pin #pinbar{width:300px;flex:none;order:-1}
+  #pin #seekwrap{width:300px;flex:none;order:-1}
   #pin .volrow{flex:1;min-width:160px}
   nav{height:60px;justify-content:center;gap:56px;padding-bottom:0}
   nav>button{flex:none;flex-direction:row;gap:8px;font-size:13px}
@@ -419,7 +438,11 @@ nav .ni{font-size:16px;line-height:1}
         <span id="evi" class="badge mut">未连接</span>
       </div>
       <div id="pinwrap">
-        <div id="pinbar" class="track"><i style="width:0"></i></div>
+        <div id="seekwrap">
+          <div id="pinbar" class="track"><i style="width:0"></i></div>
+          <input id="seek" type="range" min="0" max="1000" value="0" step="1"
+                 aria-label="播放进度" disabled>
+        </div>
         <div id="row2">
           <div id="transport">
             <button class="tbtn" id="bBack" title="后退 15 秒" aria-label="后退 15 秒">
@@ -1046,6 +1069,17 @@ function notePos(p) {
 }
 
 function shownPosition(p, d) {
+  // 🔴 刚拖完的那一下，屏幕上必须是**刚拖到的位置**。Mac 端每条指令之后都会
+  // publishStatus，但那一个往返之间 `p.position` 还是旧的——不覆盖的话进度条
+  // 会先弹回原处再跳过去，看起来就是「这一拖没生效」，而下一步多半是再拖一次。
+  // 覆盖在**收到新记录**（updated 变了）时立刻退场，2.5 秒是兜底：
+  // 和整条进度条一样，本地推进、服务端纠正。
+  const sk = S.seek;
+  if (sk && sk.id === p.id && sk.updated === p.updated && Date.now() - sk.at < 2500) {
+    const moved = p.state === 'playing' && isLive(p)
+      ? sk.pos + (Date.now() - sk.at) / 1000 : sk.pos;
+    return d ? Math.min(moved, d) : moved;
+  }
   const raw = p.position || 0;
   // 只在确实在播、而且这台机器还在报心跳的时候往前走。掉线的机器继续走进度
   // 等于拿一个编出来的数字盖住「它已经不在了」。
@@ -1347,6 +1381,7 @@ const S = {
   cmd: 'idle', failMsg: '', doneMsg: '', doneTimer: null, cmdTimer: null, failTimer: null,
   watch: null, watchTimer: null,
   openRow: null, q: '', pos: null, volHeld: false, volPending: null,
+  seekHeld: false, seek: null,
   audio: null, auditioning: null, auditionErr: '', auditionErrID: null, auditionTimer: null,
   devTarget: null, compact: false, endMode: null, openHist: null, itemSig: null,
 };
@@ -1501,7 +1536,8 @@ function renderNow() {
   const free = liveFree();
   const title = $('#pintitle'), sub = $('#pinsub'), evi = $('#evi');
   if (!p) { title.textContent = '还没有设备'; sub.textContent = '在 Mac 上打开「连接控制端」';
-            evi.className = 'badge mut'; evi.textContent = '—'; $('#bPlay').disabled = true; return; }
+            evi.className = 'badge mut'; evi.textContent = '—'; $('#bPlay').disabled = true;
+            renderSeek(null, 0, 0); return; }
 
   // 🔴 列表的高亮读的是 `p.currentItem`，而列表只在「清单本身变了」时才重绘
   // （`ss_players` 事件只调 renderChips + renderNow）——于是换一条播放之后，
@@ -1512,10 +1548,9 @@ function renderNow() {
   const d = p.duration || 0, at = shownPosition(p, d);
   title.textContent = p.currentName || '还没装载';
   title.title = p.currentName || '';
-  // 0.8 秒的音效在这儿也一样不能读成 `0:00 / 0:00`（和清单同一个坑）
-  sub.textContent = d > 0 && d < 10
-    ? `${at.toFixed(1)} / ${d.toFixed(1)} 秒` : `${fmt(at)} / ${fmt(d)}`;
-  $('#pinbar').firstElementChild.style.width = d ? Math.min(100, at / d * 100) + '%' : '0';
+  // 拖动中这行由 `#seek` 的 oninput 写（跟着手指走），别每秒覆盖回去。
+  if (!S.seekHeld) sub.textContent = timeRead(at, d);
+  renderSeek(p, at, d);
 
   // 出声证据（A10 四态）。指令回执优先——它是刚刚按下那一下的结论。
   if (S.cmd !== 'idle') {
@@ -1620,6 +1655,67 @@ $('#vol').onchange = () => {
   clearTimeout(S.volPending);
   S.volPending = setTimeout(() => { S.volHeld = false; cmd('volume', { volume: v }); }, 250);
 };
+
+/* ---------- 进度条：拖到哪儿就从哪儿播 ---------- */
+/* 指令通道是现成的 —— `seek` Mac 端一直就有（「后退 15 秒」用的就是它），
+ * 所以这里没有版本卡点，Mac 端一行没改。
+ *
+ * 拖的时候读数跟手但**不下发**：和音量条同一条理由，拖过去的每一格都发一条，
+ * 蓝牙那头当场卡住。松手才发一条 seek。 */
+/* 0.8 秒的音效不能读成 `0:00 / 0:00`（和清单 `dur()` 同一个坑）。 */
+const timeRead = (at, d) => d > 0 && d < 10
+  ? `${at.toFixed(1)} / ${d.toFixed(1)} 秒` : `${fmt(at)} / ${fmt(d)}`;
+
+function renderSeek(p, at, d) {
+  const el = $('#seek');
+  // 🔴 拖不动的时候要说得出为什么。手机上没有 hover，所以先把钮**藏掉**
+  // （CSS 里 :disabled 是 opacity:0）——一个摆在那儿拖不动的白圆点，
+  // 比没有这个钮更像坏了。tip 只是桌面的补充。
+  const why = !p || p.state === 'idle' ? '还没装载成品'
+    : !(isLive(p) || isWaking(p)) ? '设备不在线'
+    : d > 0 ? '' : '这条素材时长未知，没有可跳的位置';
+  el.disabled = !!why;
+  el.title = why || '拖到哪儿就从哪儿播';
+  if (S.seekHeld) return;          // 拖动中：值由手指说了算，别每秒盖回去
+  const v = d > 0 ? Math.min(1, Math.max(0, at / d)) : 0;
+  el.value = Math.round(v * 1000);
+  setSeekFill(v);
+}
+/* 🔴 填充按 thumb 的**实际行程**算，不能直接用百分比 —— 音量条那条坑原样适用：
+ * 原生 thumb 中心从 6.5px 走到 (宽 - 6.5px)，而百分比宽度从 0 走到满宽，
+ * 两者只在 0 和 50% 附近对得上，拖到头就会看到白圆钮跑到填充外面去。 */
+function setSeekFill(v) {
+  v = Math.max(0, Math.min(1, v));
+  // 0 就是 0：一点蓝都不该剩，否则「是不是真回到开头了」得靠猜。
+  $('#pinbar').firstElementChild.style.width =
+    v === 0 ? '0' : `calc(6.5px + (100% - 13px) * ${v})`;
+}
+const seekTarget = () => {
+  const p = current(), d = (p && p.duration) || 0;
+  return { p, d, pos: Math.max(0, Math.min(d, +$('#seek').value / 1000 * d)) };
+};
+/* 拖到一半被打断（手指划出按钮、来电、PWA 切后台）时 change 未必来得了。
+   不放开的话进度条**永远停在那儿**，看起来和播放卡死一模一样。 */
+function releaseSeek() { S.seekHeld = false; $('#pinbar').classList.remove('held'); }
+
+$('#seek').oninput = () => {
+  const { d, pos } = seekTarget();
+  S.seekHeld = true;
+  $('#pinbar').classList.add('held');
+  setSeekFill(d ? pos / d : 0);
+  // 拖的时候唯一想知道的就是「松手会落在哪」，所以时间读数跟着手指走。
+  $('#pinsub').textContent = timeRead(pos, d);
+};
+$('#seek').onchange = () => {
+  const { p, pos } = seekTarget();
+  releaseSeek();
+  if (!p) return;
+  S.seek = { id: p.id, updated: p.updated, pos, at: Date.now() };
+  cmd('seek', { position: pos });
+  renderNow();
+};
+$('#seek').addEventListener('pointercancel', () => { releaseSeek(); renderNow(); });
+$('#seek').addEventListener('blur', () => { if (S.seekHeld) { releaseSeek(); renderNow(); } });
 
 /* 滚动就压缩（A1）。压缩后暂停、音量、后退 15 秒全都还在，不必滚回顶部。 */
 /* 🔴 压缩会让清单容器**变高约 94px**，于是浏览器把 scrollTop 往回夹；夹过阈值
