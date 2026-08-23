@@ -2028,24 +2028,41 @@ function uploadPick() {
  *   gapSeconds —— 只影响第 i≥1 次的落点，而这里只有一次；拿来存「一轮多长」
  * 想要干净就得给 ss_schedules 加一个 json 字段，那是动生产 schema，另说。
  * ============================================================ */
-const FP_SEQ = '自由排', FP_RND = '自由排·随机';
+/* 🔴 `endTime` 是 max:5 的 text 字段（本来存 HH:MM），所以标记**必须 ≤5 字符**。
+   `自由排·随机` 是 6 个字符，PocketBase 直接 400，而它回的
+   `Failed to create record.` 会原样弹到用户脸上 —— 顺序模式能存、随机模式必炸，
+   两条路只差这 3 个字。同理 `items` 是 maxSize 20000 的 json 字段。 */
+const FP_SEQ = '自由排', FP_RND = '自由排*';
+const FP_ITEMS_MAX = 20000, FP_BUDGET = FP_ITEMS_MAX * 0.95;
+const fpBytes = a => new TextEncoder().encode(JSON.stringify(a)).length;
 const isFree = s => s.mode === 'once' && String(s.endTime || '').startsWith('自由排');
 const FP = { pick: [], order: 'seq', mins: 30, q: '' };
 
 function fpDur(id) { const it = S.items.find(i => i.id === id); return it ? (it.duration || 0) : 0; }
 const fpRound = () => FP.pick.reduce((t, p) => t + fpDur(p.id) * p.n, 0);
-function fpExpand() {
+function fpOneRound() {
   const one = [];
   for (const p of FP.pick) {
     const it = S.items.find(i => i.id === p.id); if (!it) continue;
     for (let k = 0; k < p.n; k++)
       one.push({ id: it.id, name: it.name, localPath: it.localPath, duration: it.duration || 0 });
   }
+  return one;
+}
+/* 一轮本身就装不下 —— 两种顺序都写不进去，所以判据基于一轮，不基于展开结果。 */
+const fpOverflow = () => fpBytes(fpOneRound()) > FP_BUDGET;
+function fpExpand() {
+  const one = fpOneRound();
   if (FP.order !== 'rand') return one;
   // 随机：预先展开够用的轮数，每轮各自洗牌——Mac 只管照序播，
   // 于是「每轮顺序不同」不需要它做任何事。多重集不变，所以每轮总长相同。
   const round = fpRound() || 1;
-  const laps = Math.max(1, Math.min(24, Math.ceil((FP.mins * 60 || round) / round)));
+  const want = Math.max(1, Math.min(24, Math.ceil((FP.mins * 60 || round) / round)));
+  // 🔴 再按字节预算夹一次。零点几秒的音效一轮才几秒，30 分钟要滚几百轮，
+  //    而 20000 字节（每项含一条绝对路径）大约只装得下一百来项。
+  //    超一个字节是整条写不进去，不是被截断。少展开几轮无害：Mac 播完 items
+  //    本来就绕回第一条，代价只是「每轮不重样」到第 N 轮为止。
+  const laps = Math.max(1, Math.min(want, Math.floor(FP_BUDGET / Math.max(1, fpBytes(one)))));
   const out = [];
   for (let i = 0; i < laps; i++) {
     const a = one.slice();
@@ -2060,6 +2077,10 @@ function fpConcl() {
   const round = fpRound();
   if (!FP.pick.length) return ['还没选素材', 'mut'];
   if (!round) return ['选中的素材时长都是 0，排不出来', 'bad'];
+  if (fpOverflow()) {                       // 写不进去，得在按下之前说
+    const one = fpOneRound(), per = fpBytes(one) / one.length;
+    return [`选了 ${one.length} 条，太多了 · 最多约 ${Math.floor(FP_BUDGET / per)} 条`, 'bad'];
+  }
   const approx = FP.order === 'rand' ? '平均' : '';
   if (!FP.mins) return [`${approx}一轮 ${fmt(round)} · 只放这 1 轮，放完就停`, 'mut'];
   const total = FP.mins * 60, rounds = total / round;
@@ -2148,9 +2169,11 @@ function renderFP2() {
     return `<i style="left:${l}%;width:${Math.max(1.5, w - .8)}%;opacity:${1 - i % 3 * .22}"></i>`;
   }).join('') + `<u><span>0:00</span><span>一轮 ${fmt(round)}</span></u>`;
   const p = current();
-  const why = !isLive(p) ? (isWaking(p) ? '连接中' : '设备离线') : '';
+  const over = fpOverflow();
+  const why = over ? '选太多了' : !isLive(p) ? (isWaking(p) ? '连接中' : '设备离线') : '';
   $('#fpGo').disabled = !!why;
   $('#fpGo').textContent = why || '立刻开始';
+  $('#fpSave').disabled = over;             // 存成定时同样写这条记录
 }
 $$('#fpOrder button').forEach(b => b.onclick = () => { FP.order = b.dataset.o; renderFP2(); });
 $$('#fpMins button').forEach(b => b.onclick = () => {
@@ -2164,7 +2187,7 @@ $$('#fpMins button').forEach(b => b.onclick = () => {
 
 async function fpWrite(enabled) {
   const items = fpExpand();
-  if (!items.length) return;
+  if (!items.length || fpOverflow()) return;
   const round = fpRound();
   const now = new Date(), p = cnParts(now);
   const secs = FP.mins ? FP.mins * 60 : round;
