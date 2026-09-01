@@ -326,6 +326,7 @@ nav .ni{font-size:16px;line-height:1}
       flex-direction:column;gap:12px}
 .card .lab{font-size:12px;font-weight:600;color:var(--t3)}
 .card .lab.row2{display:flex;align-items:center;justify-content:space-between}
+.fpGapWhy{font-size:12px;color:var(--t3);line-height:1.5}
 .lines{background:var(--card);border-radius:16px;padding:0 14px}
 .lines>div{height:46px;display:flex;align-items:center;justify-content:space-between;
            border-bottom:.5px solid var(--line);font-size:15px}
@@ -633,6 +634,17 @@ nav .ni{font-size:16px;line-height:1}
             <button data-m="0">不限时</button>
             <button data-m="-1" class="dash">自定</button>
           </div>
+        </div>
+        <div class="card">
+          <div class="lab row2"><span>段间停顿</span><span class="sw" id="fpGapSw"><i></i></span></div>
+          <div class="chips hide" id="fpGapChips">
+            <button data-g="10">10 秒</button>
+            <button data-g="30" class="on">30 秒</button>
+            <button data-g="60">1 分钟</button>
+            <button data-g="180">3 分钟</button>
+            <button data-g="-1" class="dash">自定</button>
+          </div>
+          <div class="fpGapWhy" id="fpGapWhy">现在是一条接一条，中间不停</div>
         </div>
         <div class="card">
           <div class="lab">这一轮的落点</div>
@@ -2036,58 +2048,107 @@ const FP_SEQ = '自由排', FP_RND = '自由排*';
 const FP_ITEMS_MAX = 20000, FP_BUDGET = FP_ITEMS_MAX * 0.95;
 const fpBytes = a => new TextEncoder().encode(JSON.stringify(a)).length;
 const isFree = s => s.mode === 'once' && String(s.endTime || '').startsWith('自由排');
-const FP = { pick: [], order: 'seq', mins: 30, q: '' };
+const FP = { pick: [], order: 'seq', mins: 30, q: '', gapOn: false, gapSec: 30 };
+
+/* ---------- 段间停顿 ----------
+ * 用户要的是「排完几条，中间自己留空，而且完全没有规律」。
+ *
+ * 🔴 停顿**烘进那一项的 duration**，Mac 端仍然一行没改。`cue(at:)` 拿 duration
+ * 当「这一段在时间轴上占多久」用，而一段音频**加上它后面的静默**确实占那么久：
+ * 声音放完之后 player 停在末尾，而 cursor（规则 / index / lap / 路径）一个都没变，
+ * 于是不会重新装载，多出来的那段时间自然就是静音。到点了 cue 指向下一项，换段。
+ * 真实时长另存 `play` —— Mac 端解析 items 时逐个 key 取，多出来的字段它看不见。
+ *
+ * 🔴 骰子掷在**写规则那一刻**，不在播的时候：和随机顺序同一条理由，控制端要能
+ * 提前说出这一轮怎么排，两端才不可能分家。所以开了停顿就必须**预先展开多轮** ——
+ * 只写一轮的话 Mac 绕回第一条时会把同一组停顿原样再放一遍，第二轮和第一轮
+ * 一模一样，而「没有规律」正是这功能存在的理由。
+ *
+ * 浮动固定 ±10 秒（设 30 秒 = 20–40 秒之间）。设得比 10 还短时收窄到 ±间隔，
+ * 否则下界会是负数，「停 5 秒」有一半的时候等于没停。 */
+const FP_SPREAD = 10;
+const fpSpread = () => Math.min(FP_SPREAD, FP.gapSec);
+/* 一对数值只用一个单位，由大的那端决定 —— 「20 秒–1:10」两端读数不一致。 */
+const fpGapRange = () => {
+  const lo = Math.max(0, FP.gapSec - fpSpread()), hi = FP.gapSec + fpSpread();
+  return hi < 60 ? `${Math.round(lo)}–${Math.round(hi)} 秒` : `${fmt(lo)}–${fmt(hi)}`;
+};
+/* 一项**真正会出声**多久。老规则（以及关掉停顿写的）没有 `play`，那时
+   duration 本来就是音频长度。 */
+const fpPlay = it => (it && it.play != null ? it.play : ((it && it.duration) || 0));
+const fpRoll = () => {
+  const sp = fpSpread();
+  return Math.round((FP.gapSec - sp + Math.random() * sp * 2) * 10) / 10;
+};
+/* 展开多轮的两个理由，任一成立都要给每项标轮次：随机顺序、随机停顿。
+   标了 `lap` 规则卡才说得清「一轮放什么」（countTags 只合并相邻同名，
+   顺序模式展开 12 轮会念成「甲 ×2 → 乙 → 甲 ×2 → +1」）。 */
+const fpMulti = () => FP.order === 'rand' || FP.gapOn;
 
 function fpDur(id) { const it = S.items.find(i => i.id === id); return it ? (it.duration || 0) : 0; }
+/* 一轮的**音频**总长，不含停顿 —— 「素材时长都是 0」的判据要用它。 */
 const fpRound = () => FP.pick.reduce((t, p) => t + fpDur(p.id) * p.n, 0);
-function fpOneRound() {
+const fpCount = () => FP.pick.reduce((t, p) => t + p.n, 0);
+/* 一轮在时间轴上占多久（期望值：每段的停顿是 gapSec ± spread，均值就是 gapSec）。 */
+const fpRoundFull = () => fpRound() + (FP.gapOn ? fpCount() * FP.gapSec : 0);
+
+function fpOneRound(lap) {
   const one = [];
   for (const p of FP.pick) {
     const it = S.items.find(i => i.id === p.id); if (!it) continue;
-    for (let k = 0; k < p.n; k++)
-      one.push({ id: it.id, name: it.name, localPath: it.localPath, duration: it.duration || 0 });
+    for (let k = 0; k < p.n; k++) {
+      const play = it.duration || 0;
+      const row = { id: it.id, name: it.name, localPath: it.localPath, duration: play };
+      // 关掉停顿时形状和以前**逐字节一致**：不多写 play，也不多写 lap。
+      if (FP.gapOn) { row.duration = Math.round((play + fpRoll()) * 10) / 10; row.play = play; }
+      if (lap != null) row.lap = lap;
+      one.push(row);
+    }
   }
   return one;
 }
-/* 一轮本身就装不下 —— 两种顺序都写不进去，所以判据基于一轮，不基于展开结果。 */
-const fpOverflow = () => fpBytes(fpOneRound()) > FP_BUDGET;
+/* 一轮本身就装不下 —— 两种顺序都写不进去，所以判据基于一轮，不基于展开结果。
+   量的必须是**真正会写进去的那一项**：`play` / `lap` 也占字节。 */
+const fpOverflow = () => fpBytes(fpOneRound(fpMulti() ? 0 : null)) > FP_BUDGET;
 function fpExpand() {
-  const one = fpOneRound();
-  if (FP.order !== 'rand') return one;
-  // 随机：预先展开够用的轮数，每轮各自洗牌——Mac 只管照序播，
-  // 于是「每轮顺序不同」不需要它做任何事。多重集不变，所以每轮总长相同。
-  const round = fpRound() || 1;
+  if (!fpMulti()) return fpOneRound();
+  // 预先展开够用的轮数：随机顺序每轮各自洗牌，随机停顿每轮各自重掷——
+  // Mac 只管照序播，于是「每轮不重样」不需要它做任何事。
+  const round = fpRoundFull() || 1;
   const want = Math.max(1, Math.min(24, Math.ceil((FP.mins * 60 || round) / round)));
   // 🔴 再按字节预算夹一次。零点几秒的音效一轮才几秒，30 分钟要滚几百轮，
   //    而 20000 字节（每项含一条绝对路径）大约只装得下一百来项。
   //    超一个字节是整条写不进去，不是被截断。少展开几轮无害：Mac 播完 items
   //    本来就绕回第一条，代价只是「每轮不重样」到第 N 轮为止。
-  const laps = Math.max(1, Math.min(want, Math.floor(FP_BUDGET / Math.max(1, fpBytes(one)))));
+  const laps = Math.max(1, Math.min(want,
+    Math.floor(FP_BUDGET / Math.max(1, fpBytes(fpOneRound(0))))));
   const out = [];
   for (let i = 0; i < laps; i++) {
-    const a = one.slice();
-    for (let j = a.length - 1; j > 0; j--) { const k = Math.floor(Math.random() * (j + 1));
-                                             [a[j], a[k]] = [a[k], a[j]]; }
+    const a = fpOneRound(i);
+    if (FP.order === 'rand')
+      for (let j = a.length - 1; j > 0; j--) { const k = Math.floor(Math.random() * (j + 1));
+                                               [a[j], a[k]] = [a[k], a[j]]; }
     out.push(...a);
   }
   return out;
 }
 /* 结论行（A3「结论行的四种话」）。算法就是设计稿里那份。 */
 function fpConcl() {
-  const round = fpRound();
+  const round = fpRoundFull();
   if (!FP.pick.length) return ['还没选素材', 'mut'];
-  if (!round) return ['选中的素材时长都是 0，排不出来', 'bad'];
+  if (!fpRound()) return ['选中的素材时长都是 0，排不出来', 'bad'];
   if (fpOverflow()) {                       // 写不进去，得在按下之前说
-    const one = fpOneRound(), per = fpBytes(one) / one.length;
+    const one = fpOneRound(fpMulti() ? 0 : null), per = fpBytes(one) / one.length;
     return [`选了 ${one.length} 条，太多了 · 最多约 ${Math.floor(FP_BUDGET / per)} 条`, 'bad'];
   }
-  const approx = FP.order === 'rand' ? '平均' : '';
+  const approx = FP.order === 'rand' || FP.gapOn ? '平均' : '';
   if (!FP.mins) return [`${approx}一轮 ${fmt(round)} · 只放这 1 轮，放完就停`, 'mut'];
   const total = FP.mins * 60, rounds = total / round;
   if (rounds < 1) {
+    const per = FP.gapOn ? FP.gapSec : 0;
     let acc = 0, cut = FP.pick[0];
-    for (const p of FP.pick) { if (acc + fpDur(p.id) * p.n > total) { cut = p; break; }
-                               acc += fpDur(p.id) * p.n; }
+    for (const p of FP.pick) { if (acc + (fpDur(p.id) + per) * p.n > total) { cut = p; break; }
+                               acc += (fpDur(p.id) + per) * p.n; }
     const nm = (S.items.find(i => i.id === cut.id) || {}).name || '?';
     return [`一轮 ${fmt(round)}，只放得下 ${fmt(total)} · 会在「${nm}」中途停`, 'warn'];
   }
@@ -2158,16 +2219,23 @@ function fpBump(id, d) {
 function renderFP2() {
   $$('#fpOrder button').forEach(b => b.classList.toggle('on', b.dataset.o === FP.order));
   $$('#fpMins button').forEach(b => b.classList.toggle('on', +b.dataset.m === FP.mins));
+  $('#fpGapSw').classList.toggle('on', FP.gapOn);
+  $('#fpGapChips').classList.toggle('hide', !FP.gapOn);
+  $$('#fpGapChips button').forEach(b => b.classList.toggle('on', +b.dataset.g === FP.gapSec));
+  // 一行结论，带数字：范围本身就是「有多不规律」的全部答案。
+  $('#fpGapWhy').textContent = FP.gapOn
+    ? `每段之间停 ${fpGapRange()}，每一段都重掷，不会成规律`
+    : '现在是一条接一条，中间不停';
   const [t, k] = fpConcl();
   const c = $('#fpConcl2'); c.textContent = t; c.className = 'concl ' + k;
-  // 一轮的落点：每条一格，宽度按时长（A3）
-  const list = fpExpand(), round = fpRound() || 1;
-  const one = FP.order === 'rand' ? list.slice(0, FP.pick.reduce((n, p) => n + p.n, 0)) : list;
+  // 一轮的落点：每条一格，宽度按**音频**时长，停顿自然成为格子之间的留白（A3）
+  const one = fpExpand().slice(0, fpCount());
+  const span = one.reduce((n, i) => n + (i.duration || 0), 0) || 1;
   let x = 0;
   $('#fpLane').innerHTML = one.map((it, i) => {
-    const w = (it.duration || 0) / round * 100, l = x; x += w;
+    const w = fpPlay(it) / span * 100, l = x; x += (it.duration || 0) / span * 100;
     return `<i style="left:${l}%;width:${Math.max(1.5, w - .8)}%;opacity:${1 - i % 3 * .22}"></i>`;
-  }).join('') + `<u><span>0:00</span><span>一轮 ${fmt(round)}</span></u>`;
+  }).join('') + `<u><span>0:00</span><span>一轮 ${fmt(span)}</span></u>`;
   const p = current();
   const over = fpOverflow();
   const why = over ? '选太多了' : !isLive(p) ? (isWaking(p) ? '连接中' : '设备离线') : '';
@@ -2176,6 +2244,15 @@ function renderFP2() {
   $('#fpSave').disabled = over;             // 存成定时同样写这条记录
 }
 $$('#fpOrder button').forEach(b => b.onclick = () => { FP.order = b.dataset.o; renderFP2(); });
+$('#fpGapSw').onclick = () => { FP.gapOn = !FP.gapOn; renderFP2(); };
+$$('#fpGapChips button').forEach(b => b.onclick = () => {
+  if (+b.dataset.g === -1) {
+    const v = prompt('每段之间停多少秒？（上下各浮动 10 秒）', String(FP.gapSec));
+    if (v === null) return;
+    FP.gapSec = Math.max(1, Math.min(3600, Math.round(+v || 0)));
+  } else FP.gapSec = +b.dataset.g;
+  renderFP2();
+});
 $$('#fpMins button').forEach(b => b.onclick = () => {
   if (+b.dataset.m === -1) {
     const v = prompt('播多少分钟？', String(FP.mins || 30));
@@ -2188,9 +2265,14 @@ $$('#fpMins button').forEach(b => b.onclick = () => {
 async function fpWrite(enabled) {
   const items = fpExpand();
   if (!items.length || fpOverflow()) return;
-  const round = fpRound();
+  // 🔴 写下去的是**掷出来的这一份**，不是期望值：不限时的时长、gapSeconds 存的
+  // 「一轮多长」都得跟真实的 items 对得上，否则控制端算的轮次会跟着漂。
+  const laps = Math.max(1, Math.round(items.length / Math.max(1, fpCount())));
+  const span = items.reduce((t, i) => t + (i.duration || 0), 0);
+  const round = Math.round(span / laps);
   const now = new Date(), p = cnParts(now);
-  const secs = FP.mins ? FP.mins * 60 : round;
+  const secs = FP.mins ? FP.mins * 60
+    : Math.ceil(items.slice(0, fpCount()).reduce((t, i) => t + (i.duration || 0), 0));
   const body = {
     player: S.sel, item: items[0].id, itemName: items[0].name, localPath: items[0].localPath,
     items, mode: 'once', date: p.date,
@@ -2224,9 +2306,17 @@ function liveFree(now = new Date()) {
     let at = lt.elapsed % span, idx = 0;
     for (let i = 0; i < list.length; i++) { if (at < list[i].duration) { idx = i; break; }
                                             at -= list[i].duration; }
+    // 🔴 轮次优先读展开时标好的 `lap`：随机停顿让每一轮长度都不同，
+    // 拿平均轮长去除会一轮一轮地漂，而它是屏幕上唯一说「第几轮」的地方。
+    const marked = list[idx].lap;
+    // 声音已经放完、正停在这一段自己的停顿里。屏幕上要说得出来——
+    // 否则「不响」和「卡住了」长得一模一样。
+    const play = fpPlay(list[idx]);
     return { rule: s, order: String(s.endTime).includes('随机') ? 'rand' : 'seq',
-             list, index: idx, offset: at, elapsed: lt.elapsed,
-             left: Math.max(0, total - lt.elapsed), lap: Math.floor(lt.elapsed / round),
+             list, index: idx, offset: at, elapsed: lt.elapsed, play,
+             gapping: at >= play, gapLeft: Math.max(0, list[idx].duration - at),
+             left: Math.max(0, total - lt.elapsed),
+             lap: marked != null ? marked : Math.floor(lt.elapsed / round),
              laps: total / round, next: list[(idx + 1) % list.length] };
   }
   return null;
@@ -2251,7 +2341,9 @@ function renderFreeQueue(free) {
         <div class="qi">${i < free.index ? '✓' : i === free.index ? '▶' : i + 1}</div>
         <div class="ell" style="flex:1;font-size:15px">${esc(it.name)}</div>
         <div class="mono" style="font-size:12px;color:var(--t2)">${
-          i === free.index ? fmt(free.offset) + '/' + fmt(it.duration) : fmt(it.duration)}</div>
+          i !== free.index ? fmt(fpPlay(it))
+            : free.gapping ? '停顿 ' + fmt(free.gapLeft)
+            : fmt(free.offset) + '/' + fmt(free.play)}</div>
       </div>`).join('')}</div></div>`;
   if (old) old.outerHTML = html; else box.insertAdjacentHTML('afterbegin', html);
 }
@@ -2269,7 +2361,7 @@ $('#endNow').onclick = async () => {
 /* 「播完这一条再停」= 把这一次的时长改成「到本条结束为止」。
    Mac 端每 0.5 秒按新规则重算，所以这就是它要的全部。 */
 $('#endAfter').onclick = async () => {
-  const f = S.endMode, rest = f.list[f.index].duration - f.offset;
+  const f = S.endMode, rest = Math.max(0, f.play - f.offset);
   await api(`/api/collections/ss_schedules/records/${f.rule.id}`,
             { method: 'PATCH', body: JSON.stringify({ playSeconds: Math.ceil(f.elapsed + rest) }) });
   $('#mEnd').classList.add('hide'); loadScheds();
@@ -2293,9 +2385,20 @@ async function loadScheds() {
    「顿击.wav → 顿击.wav +1」。规则卡上要的是**去重后**的内容概要。
    v1 那个 ruleItems 留着不动——日志筛选条还在用它，而且它是搬过来的那一份。 */
 function ruleContent(s) {
-  const list = Array.isArray(s.items) && s.items.length
-    ? countTags(s.items) : (s.itemName ? [s.itemName] : []);
+  let items = Array.isArray(s.items) ? s.items : [];
+  // 🔴 展开多轮的（随机顺序 / 随机停顿）只按**第一轮**说内容。countTags 合并的是
+  // 相邻同名，12 轮「甲甲乙」会念成「甲 ×2 → 乙 → 甲 ×2 → +1」，读起来像排了一堆。
+  if (items.some(i => i && i.lap != null)) items = items.filter(i => !i.lap);
+  const list = items.length ? countTags(items) : (s.itemName ? [s.itemName] : []);
   return list.join(' → ');
+}
+/* 这条自由排排了停顿吗——从 items 反推，没有额外字段可存。 */
+function freeGapRange(s) {
+  const gaps = (s.items || []).filter(i => i && i.play != null)
+                              .map(i => (i.duration || 0) - i.play);
+  if (!gaps.length) return '';
+  const lo = Math.min(...gaps), hi = Math.max(...gaps);
+  return hi < 60 ? `${Math.round(lo)}–${Math.round(hi)} 秒` : `${fmt(lo)}–${fmt(hi)}`;
 }
 const ruleTitle = s => isFree(s) ? '自由排 · ' + ruleHead(s) : (ruleContent(s) || ruleHead(s));
 
@@ -2399,8 +2502,11 @@ function weekLabel(w) {
 }
 
 function ruleWhen(s) {
-  if (isFree(s)) return `${s.startTime} 起 ${fmt(s.playSeconds)} · ${
-    String(s.endTime).includes('随机') ? '随机' : '轮播'}`;
+  if (isFree(s)) {
+    const g = freeGapRange(s);
+    return `${s.startTime} 起 ${fmt(s.playSeconds)} · ${
+      String(s.endTime).includes('随机') ? '随机' : '轮播'}${g ? ` · 停 ${g}` : ''}`;
+  }
   const days = weekLabel(s.weekdays);
   const head = s.mode === 'window' ? `${s.startTime}–${s.endTime}`
              : s.mode === 'once' ? `${(s.date || '').slice(5)} ${s.startTime}` : s.startTime;
