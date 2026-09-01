@@ -233,6 +233,12 @@ input{font:inherit;color:inherit}
 .linput{height:48px;border-radius:12px;background:var(--card);border:.5px solid var(--line2);
         padding:0 14px;font-size:15px;outline:none;width:100%}
 .linput:focus{border:1.5px solid var(--accent)}
+/* 标签胶囊：点一下插到光标处。🔴 用按钮说话，不用一段说明文字讲「你可以打
+   [angry]」—— 需要靠文字才看得懂的功能是交互设计出了问题。 */
+.tagrow{display:flex;flex-wrap:wrap;gap:6px}
+.tagrow>button{height:28px;padding:0 10px;border-radius:8px;background:var(--fill);
+  font-size:12px;font-weight:600;color:var(--t2);flex:none}
+.tagrow>button:active{background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--accent)}
 
 /* ---------- 列表（A2）---------- */
 main{flex:1;min-height:0;display:flex;flex-direction:column}
@@ -597,6 +603,7 @@ nav .ni{font-size:16px;line-height:1}
       <div style="font-size:13px;color:var(--t2)" id="speakTo">在 — 上生成</div>
       <textarea id="speakText" class="linput" rows="3" placeholder="打一句要说的话"
         style="resize:none;line-height:1.6;padding:10px 12px;height:auto;font-family:inherit"></textarea>
+      <div class="tagrow" id="speakTags"></div>
       <div id="speakErr" class="concl bad hide"></div>
       <div class="concl mut" id="speakCount">还没输入</div>
       <button class="btn" id="bSpeakGo" disabled>生成</button>
@@ -2064,6 +2071,7 @@ function openSpeak() {
   if (!canSpeak(p)) return alert(`「生成语音」需要 0.32.0，${deviceName(p)} 现在是 ${p && p.appVersion || '?'}。`);
   $('#speakTo').textContent = '在 ' + deviceName(p) + ' 上生成';
   $('#speakText').value = ''; $('#speakErr').classList.add('hide');
+  renderSpeakTags();
   speakCount();
   $('#mSpeak').classList.remove('hide');
   setTimeout(() => $('#speakText').focus(), 60);
@@ -2076,6 +2084,37 @@ function speakCount() {
   el.textContent = !n ? '还没输入'
     : n > SPEAK_MAX ? `${n} 字，超过 ${SPEAK_MAX} 字上限` : `${n} / ${SPEAK_MAX} 字`;
   go.disabled = !n || n > SPEAK_MAX;
+}
+/* 🔴 标签直接写在文本里就生效，Mac 端一行没改 —— 我们本来就把整段文字原样
+   传给 fish。官方文档：S2 这代认方括号，可以放在文本**任意位置**，而且
+   不限于这几个（原话 "any descriptive expression and the model will
+   interpret it"，例子是 [whispers sweetly]）。圆括号那套是老的 s1，别混。
+   这里只挑最常用的八个 —— 全塞进来就成了一张要人挑花眼的表。 */
+const SPEAK_TAGS = [
+  ['生气', '[angry]'], ['强调', '[emphasis]'], ['激动', '[excited]'],
+  ['小声', '[whispering]'], ['叹气', '[sighing]'], ['笑', '[laughing]'],
+  ['停顿', '[pause]'], ['长停顿', '[long pause]'],
+];
+function renderSpeakTags() {
+  const box = $('#speakTags');
+  if (box.childElementCount) return;          // 只画一次
+  box.innerHTML = SPEAK_TAGS.map(([zh, tag]) =>
+    `<button type="button" data-tag="${tag}" title="插到光标处：${tag}。它不会被念出来，只决定这一段怎么说">${zh}</button>`).join('');
+  box.onclick = e => {
+    const b = e.target.closest('button[data-tag]');
+    if (b) insertTag(b.dataset.tag);
+  };
+}
+/* 插到**光标处**而不是末尾：标签的用法就是「在这个位置换个说法」，
+   官方例句 "I can't believe it [gasp] you actually did it [laugh]" 正是如此。 */
+function insertTag(tag) {
+  const t = $('#speakText');
+  const a = t.selectionStart != null ? t.selectionStart : t.value.length;
+  const b = t.selectionEnd != null ? t.selectionEnd : a;
+  t.value = t.value.slice(0, a) + tag + t.value.slice(b);
+  const pos = a + tag.length;
+  t.focus(); t.setSelectionRange(pos, pos);
+  speakCount();
 }
 $('#speakText').oninput = speakCount;
 $('#speakCancel').onclick = () => $('#mSpeak').classList.add('hide');
