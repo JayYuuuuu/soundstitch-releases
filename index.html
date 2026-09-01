@@ -78,6 +78,10 @@ input{font:inherit;color:inherit}
 .chip.sel.off .cdot{background:#fff;opacity:.5}
 .chip .cnote{font-size:11px;color:rgba(255,255,255,.85)}
 .chip:not(.sel) .cnote{color:var(--t3)}
+/* 账号胶囊：常驻在设备之后，一台设备都没有时它是屏幕上唯一的出路。 */
+.chip.acct{background:var(--fill);border-color:transparent;padding:0 12px}
+.chip.acct .cname{color:var(--t2)}
+.chip.acct svg{width:13px;height:13px;flex:none;color:var(--t3)}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
 @keyframes spin{to{transform:rotate(360deg)}}
 
@@ -570,6 +574,21 @@ nav .ni{font-size:16px;line-height:1}
         <div><span style="color:var(--t2);font-size:14px">版本</span><span class="v" id="devVer">—</span></div>
       </div>
       <button class="btn sec" id="devReset" style="height:46px;font-size:16px;font-weight:400">用回机器名</button>
+    </div>
+  </div>
+</div>
+
+<!-- 账号：🔴 入口必须和设备无关。退出登录原来长在设备弹窗里，
+     而「设备一台都没有」正是最需要退出重登的那一刻——没有胶囊就点不开它。 -->
+<div class="mask hide" id="mAcct">
+  <div class="sheet">
+    <div class="shead"><button id="acctCancel">取消</button><span class="ttl">账号</span><span class="ph"></span></div>
+    <div class="sbody scroll">
+      <div class="lines">
+        <div><span style="color:var(--t2);font-size:14px">账号</span><span class="v ell" id="acctMail">—</span></div>
+        <div><span style="color:var(--t2);font-size:14px">服务器</span><span class="v ell" id="acctUrl">—</span></div>
+        <div title="打开一次控制台就自动续 7 天；连着 7 天没开才需要重新登录"><span style="color:var(--t2);font-size:14px">登录有效期</span><span class="v" id="acctExp">—</span></div>
+      </div>
       <button class="btn" id="bOut" style="background:none;color:var(--bad);height:46px;font-size:15px">退出登录</button>
     </div>
   </div>
@@ -791,7 +810,10 @@ async function api(path, opts = {}) {
     'Content-Type': 'application/json',
     ...(S.token ? { Authorization: S.token } : {}), ...(opts.headers || {}) } });
   const body = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(body.message || `HTTP ${r.status}`);
+  // 🔴 状态码要带出去，别只留 message：401 的 message 是一句英文
+  // （"The request requires valid record authorization token."），里面没有 "401"，
+  // 按字符串找状态码会漏，然后把这句英文原样甩到用户脸上。
+  if (!r.ok) { const e = new Error(body.message || `HTTP ${r.status}`); e.status = r.status; throw e; }
   return body;
 }
 
@@ -1436,6 +1458,7 @@ const S = {
   seekHeld: false, seek: null,
   audio: null, auditioning: null, auditionErr: '', auditionErrID: null, auditionTimer: null,
   devTarget: null, compact: false, endMode: null, openHist: null, itemSig: null,
+  authAt: 0,
 };
 
 /* ---------- 登录 ---------- */
@@ -1461,17 +1484,55 @@ $('#bLogin').onclick = async () => {
   } catch (e) { $('#lgErr').textContent = String(e.message || e); $('#lgErr').classList.remove('hide'); }
 };
 
+/* ---------- 令牌：过期不会报错，所以必须自己去问 ----------
+ *
+ * 🔴 **PocketBase 的 list 规则是过滤条件，不是权限门。** `ss_players` 的规则写的是
+ * `@request.auth.id != "" && ...`，未认证时这条不成立，于是查询命中 0 条，
+ * 服务端老老实实回 **200 `{"items":[],"totalItems":0}`** —— 不是 401。
+ * 实测（2026-09-01，无 token / 伪造 token 各一次）两种都是这个结果。
+ *
+ * 后果：`ss_users` 的 authToken 只有 **7 天**（服务端 `authToken.duration=604800`），
+ * 到期那一刻页面拿到一个语法上完全正常的空列表，如实画成「还没有设备」，
+ * 而 `refreshAll` 里每一处错误都被 `.catch(() => {})` 吞着——**一个字的错误都不会有**。
+ * 用户看到的就是设备凭空消失，退出重登才好，而退出按钮当时还藏在设备胶囊里
+ * （没有设备 = 没有胶囊 = 点不开）。
+ *
+ * 唯一会说实话的端点是 **auth-refresh**：无效令牌必回 401（实测）。所以拿它当闸门，
+ * 顺带续期——实测过一次真的续：登录拿到的令牌隔 70 秒 refresh，到期时刻**正好推后 70 秒**
+ * （每次都重新计满 7 天）。于是只要 10 分钟内开过一次控制台，令牌永远走不到过期；
+ * 真的连着 7 天没开，也是明明白白一个登录框，不再是凭空消失的设备列表。 */
+async function refreshAuth() {
+  const b = await api('/api/collections/ss_users/auth-refresh', { method: 'POST' });
+  if (b.token) { S.token = b.token; localStorage.ssToken = b.token; }
+  S.authAt = Date.now();
+  return b;
+}
+/* 距上次成功续期不到 10 分钟就不发请求：45 秒那拍和每次回前台都会叫它。 */
+async function ensureAuth(force) {
+  if (!S.token) return;
+  if (!force && Date.now() - S.authAt < 600000) return;
+  await refreshAuth();
+}
+/* 🔴 只有 401 才踢人。断网、NAS 重启都会让请求失败，那时弹登录框
+ * 等于让人去输一个根本没错的密码。 */
+function onAuthErr(e) { if (e && e.status === 401) authGone(); }
+function authGone(msg) {
+  S.token = ''; localStorage.removeItem('ssToken');
+  if (S.es) { S.es.close(); S.es = null; }
+  showLogin(msg || '登录过期，重新登录一次');
+}
+
 /* ---------- 启动 ---------- */
 async function start() {
   if (!S.token) return showLogin();
   try {
+    await ensureAuth(true);   // 🔴 先验票再干活：空列表分不清「没设备」和「没登录」
     await loadPlayers();
     connectRealtime();
     loadShared().catch(() => {});
   } catch (e) {
-    // 401 = 令牌过期。说人话，别把它翻译成「账号或密码不对」——那会让人去改密码。
-    if (String(e.message || e).includes('401')) { S.token = ''; localStorage.removeItem('ssToken');
-      return showLogin('登录过期，重新登录一次'); }
+    // 令牌过期说人话，别翻译成「账号或密码不对」——那会让人去改密码。
+    if (e.status === 401) return authGone();
     showLogin(String(e.message || e));
   }
 }
@@ -1510,7 +1571,27 @@ function renderChips() {
     b.onclick = () => p.id === S.sel ? openDevSheet(p) : select(p.id);
     box.appendChild(b);
   }
+  box.appendChild(acctChip());
 }
+
+/* 🔴 无论有没有设备都在。原来退出登录藏在设备弹窗里，于是「设备一台都没有」
+ * ——正是最需要退出重登的那一刻——屏幕上一个出口都没有。 */
+function acctChip() {
+  const b = document.createElement('button');
+  b.className = 'chip acct';
+  b.setAttribute('aria-label', '账号');
+  b.innerHTML = `<svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+    <circle cx="8" cy="5.2" r="2.8" stroke="currentColor" stroke-width="1.4"/>
+    <path d="M2.6 14c.5-2.9 2.7-4.4 5.4-4.4s4.9 1.5 5.4 4.4" stroke="currentColor"
+          stroke-width="1.4" stroke-linecap="round"/></svg><span class="cname">${esc(acctName())}</span>`;
+  b.title = `${localStorage.ssMail || '已登录'} · ${S.url}`;
+  b.onclick = openAcctSheet;
+  return b;
+}
+const acctName = () => {
+  const n = String(localStorage.ssMail || '').split('@')[0];
+  return !n ? '账号' : n.length > 10 ? n.slice(0, 10) + '…' : n;
+};
 
 function select(id) {
   if (S.sel === id) return;
@@ -1561,6 +1642,25 @@ function openDevSheet(p) {
 $('#devCancel').onclick = () => $('#mDev').classList.add('hide');
 $('#devOK').onclick = () => setLabel($('#devName').value.trim());
 $('#devReset').onclick = () => setLabel('');
+
+/* ---------- 账号 ---------- */
+/* 令牌里的 exp 就是过期时刻，不用另存一份——存的那份迟早和真的那份分家。 */
+function tokenExpiry() {
+  try {
+    let b = S.token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+    while (b.length % 4) b += '=';
+    const exp = JSON.parse(atob(b)).exp;
+    return exp ? new Date(exp * 1000) : null;
+  } catch { return null; }
+}
+function openAcctSheet() {
+  $('#acctMail').textContent = localStorage.ssMail || '—';
+  $('#acctUrl').textContent = S.url.replace(/^https?:\/\//, '');
+  const e = tokenExpiry();
+  $('#acctExp').textContent = e ? cnTime(e.toISOString()) : '—';
+  $('#mAcct').classList.remove('hide');
+}
+$('#acctCancel').onclick = () => $('#mAcct').classList.add('hide');
 /* 退出等于换人：记住的那台机器也不该留给下一个账号。 */
 $('#bOut').onclick = () => {
   if (!confirm('退出登录？')) return;
@@ -2989,8 +3089,14 @@ function refreshAll() {
   loadShared().catch(() => {});
   if (S.sel) loadScheds().catch(() => {});
 }
-document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshAll(); });
-setInterval(refreshAll, 45000);
+/* 🔴 每一拍都先验票。空列表不会报错（见 refreshAuth 那段），所以「还在不在线上」
+ * 这件事只能主动去问；顺带续期，令牌因此永远走不到 7 天那条线。 */
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return;
+  ensureAuth().catch(onAuthErr);
+  refreshAll();
+});
+setInterval(() => { ensureAuth().catch(onAuthErr); refreshAll(); }, 45000);
 
 /* 1 秒一拍：播放中的进度是本地推进的（见 shownPosition）。 */
 let uiTick = 0;
@@ -3015,6 +3121,7 @@ document.addEventListener('touchend', e => {
 
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => {});
 setTab('now');
+renderChips();   // 账号胶囊在第一次请求回来之前就该在
 start();
 </script>
 </body>
