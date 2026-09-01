@@ -604,6 +604,14 @@ nav .ni{font-size:16px;line-height:1}
       <textarea id="speakText" class="linput" rows="3" placeholder="打一句要说的话"
         style="resize:none;line-height:1.6;padding:10px 12px;height:auto;font-family:inherit"></textarea>
       <div class="tagrow" id="speakTags"></div>
+      <!-- 🔴 试听走的是浏览器自己的 <audio>，而浏览器只够得着服务端上的文件 ——
+           生成出来的音频躺在 Mac 的磁盘上，不传一份上去，手机就永远听不到它。
+           这个循环本来就是「打一句、听听、再改一版」，所以默认开着。 -->
+      <div class="lab row2" id="speakShareRow" style="cursor:pointer;user-select:none;padding:2px 0"
+        title="合成完顺手传一份到共享库，这样手机上能直接试听（试听在你手上这台设备响，不动 Mac）。不想留的在共享栏删掉即可">
+        <span style="font-size:13px;color:var(--t2)">传一份到共享<span style="color:var(--t3);font-weight:400"> · 手机上能试听</span></span>
+        <span class="sw on" id="speakShareSw"><i></i></span>
+      </div>
       <div id="speakErr" class="concl bad hide"></div>
       <div class="concl mut" id="speakCount">还没输入</div>
       <button class="btn" id="bSpeakGo" disabled>生成</button>
@@ -1316,7 +1324,7 @@ const CMD_LIMIT = { fetch: 180000, share: 120000, pull: 120000, speak: 120000,
                     * 后才补上。最长 10+2 秒，留三秒余量给往返。 */
                    play: 15000, load: 15000 };
 
-async function cmd(action, payload = {}) {
+async function cmd(action, payload = {}, after = null) {
   if (!current()) return;
   clearTimeout(S.cmdTimer); clearTimeout(S.failTimer);
   S.cmd = 'idle';
@@ -1325,7 +1333,7 @@ async function cmd(action, payload = {}) {
   try {
     const rec = await api('/api/collections/ss_commands/records', { method: 'POST',
       body: JSON.stringify({ player: S.sel, action, payload, status: 'pending' }) });
-    watch(rec.id, CMD_LIMIT[action] || 8000);
+    watch(rec.id, CMD_LIMIT[action] || 8000, after);
   } catch (e) { fail(String(e.message || e)); }
 }
 
@@ -1341,11 +1349,11 @@ async function cmd(action, payload = {}) {
  * 不送数据（和 45 秒慢轮询同一个理由），以及**一台不回应的机器什么都不会发** ——
  * 「设备未回应」「连接中」只能靠自己数时间。所以轮询保留，只是节奏从 400 ms
  * 放到 1.2 / 2.5 秒：它现在是保险，不是主路。 */
-function watch(id, limit = 8000) {
+function watch(id, limit = 8000, after = null) {
   // 同一时刻只跟一条：新指令直接顶掉旧的，否则先超时的那条会把后一条的转圈
   // 也刷成红字。tick 每次醒来都核对自己还是不是当前那条。
   clearTimeout(S.watchTimer);
-  S.watch = { id, limit, began: Date.now() };
+  S.watch = { id, limit, began: Date.now(), after };
   const tick = async () => {
     if (!S.watch || S.watch.id !== id) return;
     const age = Date.now() - S.watch.began;
@@ -1381,7 +1389,10 @@ function watch(id, limit = 8000) {
 function settleCommand(rec) {
   if (!S.watch || !rec || rec.id !== S.watch.id) return false;
   if (rec.status === 'done') {
+    // 🔴 先把回调取出来再清 S.watch —— 清完就没得取了。
+    const after = S.watch.after;
     S.watch = null; clearTimeout(S.watchTimer); clearTimeout(S.cmdTimer);
+    if (after) { try { after(rec); } catch (e) { console.warn(e); } }
     // 🔴 以前 done 只是把转圈收掉，屏幕上什么也不说 —— 下载完了、或者
     // 「本机已有同一份」这种最该看见的结论，全都只留在 ss_commands.result 里，
     // 而那是没人会去翻的地方。成功和失败一样需要一句话。
@@ -2071,6 +2082,7 @@ function openSpeak() {
   if (!canSpeak(p)) return alert(`「生成语音」需要 0.32.0，${deviceName(p)} 现在是 ${p && p.appVersion || '?'}。`);
   $('#speakTo').textContent = '在 ' + deviceName(p) + ' 上生成';
   $('#speakText').value = ''; $('#speakErr').classList.add('hide');
+  $('#speakShareSw').classList.toggle('on', S.speakShare);
   renderSpeakTags();
   speakCount();
   $('#mSpeak').classList.remove('hide');
@@ -2116,13 +2128,27 @@ function insertTag(tag) {
   t.focus(); t.setSelectionRange(pos, pos);
   speakCount();
 }
+/* 开关记在本地：这是「我平时想不想顺手传一份」的偏好，不是某一次的选择。 */
+S.speakShare = localStorage.ssSpeakShare !== '0';
+$('#speakShareRow').onclick = () => {
+  S.speakShare = !S.speakShare;
+  localStorage.ssSpeakShare = S.speakShare ? '1' : '0';
+  $('#speakShareSw').classList.toggle('on', S.speakShare);
+};
 $('#speakText').oninput = speakCount;
 $('#speakCancel').onclick = () => $('#mSpeak').classList.add('hide');
 $('#bSpeak').onclick = openSpeak;
 $('#bSpeakGo').onclick = () => {
   const text = $('#speakText').value.trim();
   if (!text || text.length > SPEAK_MAX) return;
-  cmd('speak', { text });
+  const share = S.speakShare;
+  // 🔴 上传由 Mac 顺手做完（它知道自己刚写了哪个文件），网页只负责在回执落地后
+  // 把人送到能听的那一栏 —— 事后靠名字去猜「哪条是刚生成的」会在重名时认错。
+  cmd('speak', { text, share }, () => {
+    if (!share) return;
+    switchItemTab('shared');
+    loadShared().then(renderItems).catch(() => {});
+  });
   $('#mSpeak').classList.add('hide');
 };
 
