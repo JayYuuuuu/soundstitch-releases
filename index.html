@@ -482,6 +482,7 @@ nav .ni{font-size:16px;line-height:1}
         <button data-t="shared">共享 0</button>
       </div>
       <div style="flex:1"></div>
+      <button class="mini" id="bSpeak" style="background:var(--card);border:.5px solid var(--line2);color:var(--accent)">生成语音</button>
       <button class="mini" id="bAdd" style="background:var(--card);border:.5px solid var(--line2);color:var(--accent)">下载音频</button>
     </div>
     <div class="pad hide" id="searchWrap" style="flex:none;padding-top:8px">
@@ -583,6 +584,22 @@ nav .ni{font-size:16px;line-height:1}
       <input id="fetchLink" class="linput" placeholder="粘贴小红书分享口令或视频直链">
       <div id="fetchErr" class="concl bad hide"></div>
       <button class="btn" id="bFetch">下载</button>
+    </div>
+  </div>
+</div>
+
+<div class="mask hide" id="mSpeak">
+  <div class="sheet">
+    <div class="shead"><button id="speakCancel">取消</button><span class="ttl">生成语音</span><span class="ph"></span></div>
+    <div class="sbody scroll">
+      <!-- 🔴 「在哪台机器上生成」是这个动作的一半，写在脸上而不是靠记忆
+           （和「下载到 XX」同一条理由）。 -->
+      <div style="font-size:13px;color:var(--t2)" id="speakTo">在 — 上生成</div>
+      <textarea id="speakText" class="linput" rows="3" placeholder="打一句要说的话"
+        style="resize:none;line-height:1.6;padding:10px 12px;height:auto;font-family:inherit"></textarea>
+      <div id="speakErr" class="concl bad hide"></div>
+      <div class="concl mut" id="speakCount">还没输入</div>
+      <button class="btn" id="bSpeakGo" disabled>生成</button>
     </div>
   </div>
 </div>
@@ -877,11 +894,16 @@ const canRoute = p => p && atLeast(p.appVersion, '0.27.0');
 const canShare = p => p && atLeast(p.appVersion, '0.29.0');
 // 抓链接由被控端自己下载（音频要落在它的盘上），老版本收到 fetch 会回「不认识的指令」。
 const canFetch = p => p && atLeast(p.appVersion, '0.30.0');
+/* 🔴 合成由**要播它的那台 Mac** 做，不是浏览器。fish.audio 一个 CORS 头都不给
+   （2026-09-01 在 200 和 402 两种响应上各验过一次），而且 key 写进这个文件
+   等于公开 —— 控制台是个谁都打得开的地址。 */
+const canSpeak = p => p && atLeast(p.appVersion, '0.32.0');
 
 /* 哪些功能要哪个版本 —— 新到旧。设备弹窗用它回答「这台差在哪」。
  * 🔴 加了新的版本卡点就往这里补一条，否则设备弹窗会说「一切正常」，
  * 而按钮那边照样是灰的，两处对不上比不说更糟。 */
 const FEATURES = [
+  { min: '0.32.0', name: '生成语音' },
   { min: '0.30.0', name: '下载音频' },
   { min: '0.29.0', name: '共享音频库' },
   { min: '0.27.0', name: '切输出设备 / 机器音量' },
@@ -1280,7 +1302,7 @@ function logRow(t) {
 /* 🔴 8 秒判死是按「点播放」定的。搬字节的指令不是那个量级：
  * 抓链接要下完整段视频再分离音轨，共享要传/收整个文件。
  * 用同一个期限的结果是机器干得好好的，控制端已经红字说它没回应。 */
-const CMD_LIMIT = { fetch: 180000, share: 120000, pull: 120000,
+const CMD_LIMIT = { fetch: 180000, share: 120000, pull: 120000, speak: 120000,
                    /* 🔴 极短音效的回执是**故意**延后的：0.31.1 起 Mac 端会等 10 秒
                     * 以内的素材播完再回执，好把「响了 N 次」写进结论里 —— 否则
                     * 回执写在 play() 之后 0 ms，那时没有任何证据，而心跳要十几秒
@@ -1851,6 +1873,14 @@ function renderItems() {
   $('#searchWrap').classList.toggle('hide', !many);
   $('#auditNote').classList.toggle('hide', S.itemTab !== 'shared');
   $('#bAdd').textContent = S.itemTab === 'local' ? '下载音频' : '上传本机';
+  // 🔴 禁用的按钮必须自己说明为什么 —— 手机上不存在 hover，title 只能是补充。
+  const spk = $('#bSpeak'), sp = current(), spOK = canSpeak(sp);
+  spk.classList.toggle('hide', S.itemTab !== 'local');
+  spk.disabled = !spOK;
+  spk.textContent = spOK ? '生成语音' : '生成语音（需更新）';
+  spk.style.opacity = spOK ? '' : '.5';
+  spk.title = spOK ? '打一句话，让这台 Mac 合成成音频并加进素材'
+    : `生成语音需要 0.32.0，${deviceName(sp)} 现在是 ${sp && sp.appVersion || '?'}，在那台 Mac 上点菜单「检查更新」`;
   if (S.itemTab === 'shared') return renderShared();
 
   const box = $('#itemList'), p = current();
@@ -2024,6 +2054,39 @@ $('#bFetch').onclick = () => {
   cmd('fetch', { link });
   $('#mFetch').classList.add('hide');
 };
+/* ---------- 生成语音 ----------
+ * 🔴 和「下载音频」同一条路：控制端只写一条指令，真正干活的是被选中的那台 Mac。
+ * 它拿到文字 → 调 fish.audio → 落进素材文件夹 → 登记进可播清单。落完盘之后
+ * 它就是个普通本地文件，散布 / 定时 / 点播全都不再碰网络。 */
+const SPEAK_MAX = 500;
+function openSpeak() {
+  const p = current();
+  if (!canSpeak(p)) return alert(`「生成语音」需要 0.32.0，${deviceName(p)} 现在是 ${p && p.appVersion || '?'}。`);
+  $('#speakTo').textContent = '在 ' + deviceName(p) + ' 上生成';
+  $('#speakText').value = ''; $('#speakErr').classList.add('hide');
+  speakCount();
+  $('#mSpeak').classList.remove('hide');
+  setTimeout(() => $('#speakText').focus(), 60);
+}
+/* 一行结论：还差多少 / 超了多少。超上限时把按钮也关掉 —— 让人按下去再被
+   Mac 拒绝，等于把一次往返花在一件本地就能判的事上。 */
+function speakCount() {
+  const n = $('#speakText').value.trim().length, el = $('#speakCount'), go = $('#bSpeakGo');
+  el.className = 'concl ' + (n > SPEAK_MAX ? 'bad' : 'mut');
+  el.textContent = !n ? '还没输入'
+    : n > SPEAK_MAX ? `${n} 字，超过 ${SPEAK_MAX} 字上限` : `${n} / ${SPEAK_MAX} 字`;
+  go.disabled = !n || n > SPEAK_MAX;
+}
+$('#speakText').oninput = speakCount;
+$('#speakCancel').onclick = () => $('#mSpeak').classList.add('hide');
+$('#bSpeak').onclick = openSpeak;
+$('#bSpeakGo').onclick = () => {
+  const text = $('#speakText').value.trim();
+  if (!text || text.length > SPEAK_MAX) return;
+  cmd('speak', { text });
+  $('#mSpeak').classList.add('hide');
+};
+
 function uploadPick() {
   const p = current();
   if (!canShare(p)) return alert(`共享库需要 0.29.0，${deviceName(p)} 现在是 ${p.appVersion || '?'}。`);
