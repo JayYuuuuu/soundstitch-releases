@@ -1593,8 +1593,13 @@ function renderNow() {
   $('#bPlay').disabled = !isLive(p) && !isWaking(p);
   $('#bBack').style.opacity = p.state === 'idle' ? .4 : 1;
   const n = p.soundCount || 0, since = p.silentFor ?? -1;
+  // 🔴 停顿期间播放器停在末尾，state 报的是「已播完」——而它其实是在等下一段。
+  // 屏幕上唯一说「现在怎么回事」的就是这一行，不接住的话「停顿中」和「卡住了」
+  // 长得一模一样，而这正是排了停顿之后最常出现的那一刻。
   $('#pinsound').innerHTML = free
-    ? `${free.order === 'rand' ? '随机' : '轮播'} · 第 <b>${free.lap + 1}</b> 轮 · 剩 ${fmt(free.left)}`
+    ? (free.gapping
+        ? `停顿中 · 还剩 ${fmt(free.gapLeft)} · 下一个 ${esc(free.next.name)}`
+        : `${free.order === 'rand' ? '随机' : '轮播'} · 第 <b>${free.lap + 1}</b> 轮 · 剩 ${fmt(free.left)}`)
     : n > 0 ? `已响 <b>${n}</b> 次${since >= 0 ? ' · ' + ago(since) : ''}`
       : ended(p) ? '已播完' : playing ? '等待出声' : '未在播放';
   const out = p.outputDevice;
