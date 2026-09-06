@@ -243,6 +243,8 @@ input{font:inherit;color:inherit}
 .tagrow>button{height:28px;padding:0 10px;border-radius:8px;background:var(--fill);
   font-size:12px;font-weight:600;color:var(--t2);flex:none}
 .tagrow>button:active{background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--accent)}
+/* 「阴阳一下」是主动作、不是一枚标签：比标签高 4px，别被 .tagrow>button 压回去。 */
+.tagrow>button.mini{height:32px;padding:0 12px}
 
 /* ---------- 列表（A2）---------- */
 main{flex:1;min-height:0;display:flex;flex-direction:column}
@@ -619,6 +621,7 @@ nav .ni{font-size:16px;line-height:1}
     <div class="sbody scroll">
       <textarea id="speakText" class="linput" rows="3" placeholder="打一句要说的话"
         style="resize:none;line-height:1.6;padding:10px 12px;height:auto;font-family:inherit"></textarea>
+      <div class="tagrow"><button class="mini acc" id="bSpeakAi">阴阳一下</button></div>
       <div class="tagrow" id="speakTags"></div>
       <div class="seg wide" id="speakSpeed"></div>
       <!-- 🔴 试听在**这台设备**上响，音频还在浏览器手里，谁的盘上都没有。
@@ -2210,8 +2213,10 @@ function openSpeak() {
   $('#speakText').value = '';
   $('#speakErr').classList.add('hide');
   dropTake();
+  S.dsSeed = ''; S.dsOut = '';
   renderSpeakTags();
   renderSpeakSpeed();
+  renderAi();
   speakCount();
   $('#mSpeak').classList.remove('hide');
   setTimeout(() => $('#speakText').focus(), 60);
@@ -2225,7 +2230,7 @@ function speakCount() {
   el.textContent = n > SPEAK_MAX ? `${n} 字，超过 ${SPEAK_MAX} 字上限`
     : has ? speakSaveNote()
     : !n ? '还没输入' : `${n} / ${SPEAK_MAX} 字`;
-  go.disabled = S.spkBusy || (!has && (!n || n > SPEAK_MAX));
+  go.disabled = S.spkBusy || S.dsBusy || (!has && (!n || n > SPEAK_MAX));
   go.textContent = S.spkBusy ? '生成中…' : has ? '存下来' : '生成';
   $('#bSpeakAgain').classList.toggle('hide', !has || S.spkBusy);
 }
@@ -2300,6 +2305,127 @@ function insertTag(tag) {
   t.focus(); t.setSelectionRange(pos, pos);
   speakCount();
 }
+/* ---------- 让 DeepSeek 把一句流水账改成阴阳话 ---------- */
+/* 🔴 **浏览器直接调，不用像 fish 那样在自家 Caddy 上转一道** —— DeepSeek 给全
+ * CORS 头（实测：预检 200，`access-control-allow-origin` 精确回显本站地址，
+ * 真 POST 上也带）。少一层反代就少一处会坏的东西。
+ * key 仍然从服务端读（`ss_settings.dsKey`），没登录就没有 key。
+ *
+ * ⚠️ 这个额度**是花钱的**（和 ai-ecommerce 共用同一把 key），fish 那半才是免费的。
+ * 一次改写大约 300–3000 token，很便宜，但不是零。 */
+const DS_MODEL = 'deepseek-v4-flash-vision-exp';   // 兜底；真正用哪个由服务端 dsModel 说了算
+/* 🔴 `max_tokens` 必须给足：这一代模型**先推理再作答**，推理也算在里面。
+ * 实测推理最长 2923 字（≈2000 token）——给 1000 的时候 8 次里空手回来 1 次，
+ * `finish_reason` 是 `length` 而正文一个字都没有，看起来跟「模型不肯说」一模一样。 */
+const DS_MAX_TOKENS = 3000;
+/* temperature 1.0 而不是官方对创意写作推荐的 1.3：实测 1.3 的**推理**更容易跑飞，
+ * 而且 16 次里编出过一个不存在的标签（`[d出]`）。1.0 的话一样有花样。 */
+const DS_TEMP = 1.0;
+
+/* 人设。字数和说法全交给它自己发挥，这里只钉死三件会毁掉素材的事：
+   够短（要在一小时里反复响）、不带脏字（这话是要放给邻居听的）、
+   只输出那段话本身（多一个字的解释都会被念出来）。 */
+const DS_SYSTEM = `你是一个被楼上噪音折磨了很久的邻居。你说话阴阳怪气、绵里藏针，从不骂脏话，也从不直接发火——你越客气，听的人越难受。
+
+用户会丢给你几句关于楼上动静的流水账。把它改写成一段可以直接播放出去、让楼上听见的话。
+
+要求：
+- 一到三句，20 到 60 字。这段话会被合成成语音、在一小时里反复响起，长了没人听完。
+- 表面客气、体贴、关心、感谢，实际全是刺。
+- 不许有脏字、人身攻击、威胁、诅咒。
+- 可以在最合适的一处插入至多一个语气标签（方括号，会被语音合成器当成怎么念的指令、不会被念出来），放在它要影响的那句话之前。可选：[whispering] 小声 / [sighing] 叹气 / [chuckling] 轻笑 / [emphasis] 强调 / [pause] 停顿。用不上就别插。
+- 只输出那段话本身。不要引号、不要解释、不要emoji、不要换行、不要加标题。`;
+
+/* 🔴 只留 prompt 里给过的那五个标签，别的方括号一律剥掉。
+   实测它编出过 `[d出]` —— 认不出的标签 fish 多半会念出来，而那正是
+   「这段素材毁了」的样子。引号也剥：模型偶尔会把整句括起来。 */
+const DS_TAGS = ['whispering', 'sighing', 'chuckling', 'emphasis', 'pause'];
+function cleanScript(raw) {
+  return String(raw || '')
+    .replace(/\[([^\]]*)\]/g, (m, t) => DS_TAGS.includes(t.trim()) ? `[${t.trim()}]` : '')
+    .replace(/[「」『』“”‘’"']/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, SPEAK_MAX);
+}
+
+/* 每种失败的下一步动作都不一样，别合并成「写不出来」。 */
+function dsFail(status, message) {
+  if (status === 401) return 'DeepSeek 不认这个 key';
+  if (status === 402) return 'DeepSeek 余额不够了（这一半是花钱的，去 platform.deepseek.com 充值）';
+  if (status === 429) return 'DeepSeek 限流了，等一会儿再试';
+  if (status === 400 && /model/i.test(message || '')) return `DeepSeek 没有这个模型了（${message}）：去 ss_settings 换一个 dsModel`;
+  if (status >= 500) return `DeepSeek 那边出错了（${status}）`;
+  return `写不出来（HTTP ${status}）${message ? '：' + message : ''}`;
+}
+
+async function dsWrite(seed) {
+  const f = await speakSettings();
+  if (!f.dsKey) throw new Error('服务端还没填 DeepSeek 的 key（ss_settings.dsKey）');
+  // 推理长的时候真能跑到十几秒，别用默认超时把一次正常的改写掐死。
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 90000);
+  let r;
+  try {
+    r = await fetch('https://api.deepseek.com/chat/completions', {
+      method: 'POST', signal: ac.signal,
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + f.dsKey },
+      body: JSON.stringify({
+        model: f.dsModel || DS_MODEL, max_tokens: DS_MAX_TOKENS, temperature: DS_TEMP,
+        messages: [{ role: 'system', content: DS_SYSTEM }, { role: 'user', content: seed }],
+      }),
+    });
+  } catch (e) {
+    throw new Error(ac.signal.aborted ? 'DeepSeek 想太久了（超过 90 秒），再点一次' : String(e.message || e));
+  } finally { clearTimeout(timer); }
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(dsFail(r.status, (body.error || {}).message || body.message));
+  const choice = (body.choices || [])[0] || {};
+  const line = cleanScript((choice.message || {}).content);
+  // 🔴 空手而归**几乎总是「推理把额度用光了」**，不是它没话说。说清楚是哪一种，
+  // 否则下一步会有人去改人设，而该做的只是再点一次。
+  if (!line) throw new Error(choice.finish_reason === 'length'
+    ? '它自己想太多，把额度想没了，再点一次' : 'DeepSeek 这次什么都没写出来，再点一次');
+  return line;
+}
+
+/* 按钮**脸上**就是状态：手机上没有 hover，禁用的理由不能只写在 title 里。 */
+function aiLabel() {
+  const raw = $('#speakText').value.trim();
+  if (S.dsBusy) return { t: '正在阴阳…', on: false };
+  if (S.spkBusy) return { t: '阴阳一下', on: false };
+  if (!raw) return { t: '先写点什么', on: false };
+  if (S.dsOut && raw === S.dsOut) return { t: '再阴阳一版', on: true };
+  return { t: '阴阳一下', on: true };
+}
+function renderAi() {
+  const b = $('#bSpeakAi'), s = aiLabel();
+  b.textContent = s.t;
+  b.disabled = !s.on;
+  b.title = S.dsSeed ? `照这句重编：${S.dsSeed}` : '写一句楼上干了什么，让它替你把话说得难听一点';
+}
+async function speakAi() {
+  const raw = $('#speakText').value.trim();
+  if (!raw || S.dsBusy) return;
+  // 🔴 「再来一版」拿的是**原话**，不是拿上一版的阴阳话再阴阳一遍 ——
+  // 那样每按一次就离你要说的事更远一点。
+  const seed = (S.dsOut && raw === S.dsOut && S.dsSeed) ? S.dsSeed : raw;
+  S.dsBusy = true; $('#speakErr').classList.add('hide'); renderAi(); speakCount();
+  try {
+    const line = await dsWrite(seed);
+    S.dsSeed = seed; S.dsOut = line;
+    $('#speakText').value = line;
+    // 🔴 程序改 value **不会**触发 oninput，所以上一版语音得自己扔 ——
+    // 不扔的话屏幕上是新词、存下去的是旧声音。
+    dropTake();
+  } catch (e) {
+    $('#speakErr').textContent = String(e.message || e);
+    $('#speakErr').classList.remove('hide');
+  } finally {
+    S.dsBusy = false; renderAi(); speakCount();
+  }
+}
+
 /* ---------- 合成：走自家转发，音频落在浏览器里 ---------- */
 /* key 和音色存在服务端（`ss_settings`），不烧进代码也不进 App：安装包在公开
    仓库里，烧进去等于发布这个 key。换音色因此不用发版。 */
@@ -2308,7 +2434,9 @@ async function speakSettings() {
   const r = await api('/api/collections/ss_settings/records?perPage=1');
   const it = (r.items || [])[0] || {};
   if (!it.fishKey) throw new Error('服务端还没填 fish.audio 的 key');
-  S.fish = { key: it.fishKey, voice: it.fishVoice || '' };
+  // DeepSeek 的 key 和模型住在同一条记录里：一次请求读完，也省得两处缓存过期。
+  S.fish = { key: it.fishKey, voice: it.fishVoice || '',
+             dsKey: it.dsKey || '', dsModel: it.dsModel || DS_MODEL };
   return S.fish;
 }
 async function speakSynthesize(text) {
@@ -2441,6 +2569,7 @@ async function speakSave() {
 }
 
 /* 开关记在本地：这是「我平时要不要顺手下到那台 Mac」的偏好，不是某一次的选择。 */
+S.dsBusy = false; S.dsSeed = ''; S.dsOut = '';
 S.speakPull = localStorage.ssSpeakPull !== '0';
 // 语速同理：这是「我平时喜欢多快」的偏好，不是某一次的选择。认不出的值退回正常，
 // 免得 localStorage 被写坏之后每次合成都带一个 fish 会拒绝的参数。
@@ -2454,8 +2583,10 @@ $('#speakPullRow').onclick = () => {
 };
 // 🔴 改了文字，上一版就不再对应屏幕上这句话了 —— 留着它等于让人存下一段
 // 和输入框里不一样的音频（「抓完之后主按钮变完成」同一条理由）。
+$('#bSpeakAi').onclick = speakAi;
 $('#speakText').oninput = () => {
   if (S.spk && $('#speakText').value.trim() !== S.spk.text) dropTake();
+  renderAi();
   speakCount();
 };
 $('#bSpeakPlay').onclick = () => {
