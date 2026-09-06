@@ -2317,9 +2317,18 @@ function insertTag(tag) {
  * ⚠️ 这个额度**是花钱的**（和 ai-ecommerce 共用同一把 key），fish 那半才是免费的。
  * 一次改写大约 300–3000 token，很便宜，但不是零。 */
 const DS_MODEL = 'deepseek-v4-flash-vision-exp';   // 兜底；真正用哪个由服务端 dsModel 说了算
-/* 🔴 `max_tokens` 必须给足：这一代模型**先推理再作答**，推理也算在里面。
- * 实测推理最长 2923 字（≈2000 token）——给 1000 的时候 8 次里空手回来 1 次，
- * `finish_reason` 是 `length` 而正文一个字都没有，看起来跟「模型不肯说」一模一样。 */
+/* 🔴 **关掉推理。** 这一代模型默认先想再答，而「想」和正文共用同一个额度 ——
+ * 加了角度和禁令之后它开始死磕（每写一句都回头检查有没有犯规），实测推理写到
+ * **4887 字**把 3000 token 全吃光，正文一个字都没有：`finish_reason` 是 `length`，
+ * 从外面看跟「模型不肯说」一模一样。同一个角度连跑 5 次，**2 次空手**。
+ *
+ * 三种关法实测（同一个最爱跑飞的角度各 5 次）：
+ *   不带参数           推理 110–4887 字，空 2/5
+ *   reasoning_effort low  推理 64–312 字，空 0/5
+ *   thinking disabled   推理 **全是 0**，空 0/5   ← 用这个
+ * 「每次都是 0」不可能是碰巧，参数确实生效了；而写一句吐槽本来也不需要它想。
+ * 质量没掉（还更快更省）。哪天这个参数失效，推理会回来，所以 max_tokens 照旧留足。 */
+const DS_THINKING = { type: 'disabled' };
 const DS_MAX_TOKENS = 3000;
 /* temperature 1.0 而不是官方对创意写作推荐的 1.3：实测 1.3 的**推理**更容易跑飞，
  * 而且 16 次里编出过一个不存在的标签（`[d出]`）。1.0 的话一样有花样。 */
@@ -2333,11 +2342,36 @@ const DS_SYSTEM = `你是一个被楼上噪音折磨了很久的邻居。你说�
 用户会丢给你几句关于楼上动静的流水账。把它改写成一段可以直接播放出去、让楼上听见的话。
 
 要求：
-- 一到三句，20 到 60 字。这段话会被合成成语音、在一小时里反复响起，长了没人听完。
-- 表面客气、体贴、关心、感谢，实际全是刺。
-- 不许有脏字、人身攻击、威胁、诅咒。
+- 最多 60 字，通常一到两句。这段话会被合成成语音、在一小时里反复响起，长了没人听完。短句往往更狠，不要为了凑字数把话说软。
+- 绵里藏针，不许有脏字、人身攻击、威胁、诅咒。
+- 不许用这几个已经被用烂的比方：闹钟、晨练、锻炼身体、活力满满。
+- 不要每次都从复述楼上在干什么开头。
 - 可以在最合适的一处插入至多一个语气标签（方括号，会被语音合成器当成怎么念的指令、不会被念出来），放在它要影响的那句话之前。可选：[whispering] 小声 / [sighing] 叹气 / [chuckling] 轻笑 / [emphasis] 强调 / [pause] 停顿。用不上就别插。
 - 只输出那段话本身。不要引号、不要解释、不要emoji、不要换行、不要加标题。`;
+
+/* 🔴 **光在人设里写「别套路」没用。** 实测：同一句输入连跑 10 次，10 条里 8 条
+ * 用了「比闹钟还准时」，开头清一色「这么早 / 大清早 / 一大早」——模型有很强的
+ * 均值回归，你让它别那样，它下一句还是那样。
+ *
+ * 管用的是**换个问题问它**：每次掷一个骰子，决定这一版从哪个角度说。这跟散布引擎、
+ * 生成音效、随机停顿是同一条 —— 不让人调参数，给一组范围，掷一次。
+ *
+ * 🔴 **摇下一版时避开上一次那个角度**（`pickAngle`）。最需要换个说法的时刻正是
+ * 「再阴阳一版」，不避开的话有七分之一的概率原地打转。散布引擎的 avoidRepeat 同理。 */
+const DS_ANGLES = [
+  ['记账', '像个记录员：只报时间和次数，一个形容词都不要，也不要表达情绪。越平静越吓人。这种说法要短，10 到 25 字。'],
+  ['反问', '上来就是一个问句，不铺垫、不感谢、不复述。问完就停。'],
+  ['出主意', '一本正经地提一个礼貌但荒谬的建议，像是真心为他好。'],
+  ['自言自语', '不对着楼上说，像在跟自己嘀咕，让人觉得你已经被磨得麻木了。'],
+  ['替他说话', '站在楼上的立场替他找借口、开脱，找得越周到越扎人。'],
+  ['道歉', '反过来由你道歉，为打扰到他而抱歉——荒谬感自己会出来。'],
+  ['夸奖', '表面感谢和佩服，句句是刺。这是最常见的一种，别写得太像模板。'],
+];
+/* 纯函数，`aitest` 自检的就是它。 */
+function pickAngle(prev) {
+  const pool = DS_ANGLES.map((_, i) => i).filter(i => i !== prev);
+  return pool[Math.floor(Math.random() * pool.length)];
+}
 
 /* 🔴 只留 prompt 里给过的那五个标签，别的方括号一律剥掉。
    实测它编出过 `[d出]` —— 认不出的标签 fish 多半会念出来，而那正是
@@ -2347,6 +2381,8 @@ function cleanScript(raw) {
   return String(raw || '')
     .replace(/\[([^\]]*)\]/g, (m, t) => DS_TAGS.includes(t.trim()) ? `[${t.trim()}]` : '')
     .replace(/[「」『』“”‘’"']/g, '')
+    // 🔴 它偶尔会写 `**[chuckling]**` 这种 markdown 强调 —— 星号不剥掉就会被念出来。
+    .replace(/[*`#~]/g, '')
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, SPEAK_MAX);
@@ -2362,8 +2398,11 @@ function dsFail(status, message) {
   return `写不出来（HTTP ${status}）${message ? '：' + message : ''}`;
 }
 
-async function dsWrite(seed) {
+async function dsWrite(seed, angle) {
   const f = await speakSettings();
+  // 兜底而不是崩：漏传角度的话上面那个 catch 会把它说成「想太久了」，
+  // 一个下标错误伪装成网络问题是最难查的那种。
+  const [angleName, angleHow] = DS_ANGLES[angle] || DS_ANGLES[DS_ANGLES.length - 1];
   if (!f.dsKey) throw new Error('服务端还没填 DeepSeek 的 key（ss_settings.dsKey）');
   // 推理长的时候真能跑到十几秒，别用默认超时把一次正常的改写掐死。
   const ac = new AbortController();
@@ -2375,7 +2414,10 @@ async function dsWrite(seed) {
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + f.dsKey },
       body: JSON.stringify({
         model: f.dsModel || DS_MODEL, max_tokens: DS_MAX_TOKENS, temperature: DS_TEMP,
-        messages: [{ role: 'system', content: DS_SYSTEM }, { role: 'user', content: seed }],
+        thinking: DS_THINKING,
+        messages: [{ role: 'system', content: DS_SYSTEM
+          + `\n\n这一版用「${angleName}」这种说法：${angleHow}` },
+          { role: 'user', content: seed }],
       }),
     });
   } catch (e) {
@@ -2413,10 +2455,11 @@ async function speakAi() {
   // 🔴 「再来一版」拿的是**原话**，不是拿上一版的阴阳话再阴阳一遍 ——
   // 那样每按一次就离你要说的事更远一点。
   const seed = (S.dsOut && raw === S.dsOut && S.dsSeed) ? S.dsSeed : raw;
+  const angle = pickAngle(S.dsAngle);
   S.dsBusy = true; $('#speakErr').classList.add('hide'); renderAi(); speakCount();
   try {
-    const line = await dsWrite(seed);
-    S.dsSeed = seed; S.dsOut = line;
+    const line = await dsWrite(seed, angle);
+    S.dsSeed = seed; S.dsOut = line; S.dsAngle = angle;
     $('#speakText').value = line;
     // 🔴 程序改 value **不会**触发 oninput，所以上一版语音得自己扔 ——
     // 不扔的话屏幕上是新词、存下去的是旧声音。
@@ -2577,7 +2620,7 @@ async function speakSave() {
 }
 
 /* 开关记在本地：这是「我平时要不要顺手下到那台 Mac」的偏好，不是某一次的选择。 */
-S.dsBusy = false; S.dsSeed = ''; S.dsOut = '';
+S.dsBusy = false; S.dsSeed = ''; S.dsOut = ''; S.dsAngle = -1;
 S.speakPull = localStorage.ssSpeakPull !== '0';
 // 语速同理：这是「我平时喜欢多快」的偏好，不是某一次的选择。认不出的值退回正常，
 // 免得 localStorage 被写坏之后每次合成都带一个 fish 会拒绝的参数。
