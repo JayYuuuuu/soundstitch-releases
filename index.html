@@ -2120,7 +2120,7 @@ function renderShared() {
     row.className = 'row' + (playing ? ' on' : '');
     const err = S.auditionErrID === it.id ? S.auditionErr : '';
     row.innerHTML = `<div class="ico">${playing ? '🎧' : ''}</div>
-      <div class="mid"><div class="nm ell">${esc(it.name)}</div>
+      <div class="mid"><div class="nm ell"${it.text ? ` title="${esc(it.text)}"` : ''}>${esc(it.name)}</div>
         <div class="sub ell${err ? ' bad' : ''}">${err || (dur(it.duration) + ' · ' + size(it.fileSize) +
           (playing ? ` · 在这台设备上播放 ${fmt(S.audio ? S.audio.currentTime : 0)}` : ''))}</div></div>
       <button class="mini">${playing ? '手机停' : '手机试听'}</button>
@@ -2135,7 +2135,10 @@ function renderShared() {
   }
 }
 function sharedMenu(it) {
-  const what = prompt(`「${it.name}」\n输入新名字改名；留空并确定 = 从共享库删除；取消 = 什么都不做`, it.name);
+  // 全文在这里，不在行上：行只有一行的位置，而这段话经常比一行长。
+  const full = [it.text && `说的是：${it.text}`, it.source && `原话：${it.source}`]
+    .filter(Boolean).join('\n');
+  const what = prompt(`「${it.name}」${full ? '\n' + full : ''}\n\n输入新名字改名；留空并确定 = 从共享库删除；取消 = 什么都不做`, it.name);
   if (what === null) return;
   if (!what.trim()) {
     if (!confirm(`从共享库删除「${it.name}」？已经下到各台 Mac 的文件不受影响。`)) return;
@@ -2550,6 +2553,11 @@ async function speakSave() {
     fd.append('fileSize', String(s.blob.size));
     fd.append('sha256', sha);
     fd.append('sourceDevice', '控制台');
+    // 🔴 **文件名只剩前 14 个字，而阴阳话的力道全在后半句。** 存之前它只活在
+    // 输入框里，存完就再也找不回来了——想知道这条说了什么只能一条条听。
+    // `source` 是那句原始流水账：有它才知道这句是从哪儿改来的，也才能重编。
+    fd.append('text', s.text);
+    if (S.dsSeed && S.dsOut === s.text) fd.append('source', S.dsSeed);
     const rec = await api('/api/collections/ss_shared/records', { method: 'POST', body: fd });
     // 下到 Mac 走现成的 pull —— 它会按 sha256 先看本机有没有同一份，然后登记
     // 进可播清单。这条路本来就在，不需要为语音另开一条。
