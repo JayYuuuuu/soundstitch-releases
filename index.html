@@ -620,6 +620,7 @@ nav .ni{font-size:16px;line-height:1}
       <textarea id="speakText" class="linput" rows="3" placeholder="打一句要说的话"
         style="resize:none;line-height:1.6;padding:10px 12px;height:auto;font-family:inherit"></textarea>
       <div class="tagrow" id="speakTags"></div>
+      <div class="seg wide" id="speakSpeed"></div>
       <!-- 🔴 试听在**这台设备**上响，音频还在浏览器手里，谁的盘上都没有。
            关掉弹窗它就没了 —— 这正是「只是想试试」该有的结局。 -->
       <div class="list hide" id="speakTry">
@@ -2210,6 +2211,7 @@ function openSpeak() {
   $('#speakErr').classList.add('hide');
   dropTake();
   renderSpeakTags();
+  renderSpeakSpeed();
   speakCount();
   $('#mSpeak').classList.remove('hide');
   setTimeout(() => $('#speakText').focus(), 60);
@@ -2262,6 +2264,31 @@ function renderSpeakTags() {
     if (b) insertTag(b.dataset.tag);
   };
 }
+/* 🔴 语速和情感标签放在一起，因为它们回答同一个问题：**这句话怎么说**。
+   区别是标签由模型理解，语速是确定性参数（fish 的 `prosody.speed`，0.5–2.0）。
+   慢那侧给两档、快那侧一档：这个 App 的用法是把一句话散布进一小时，
+   慢下来是主要诉求，而「比正常还快」很少有人要第二档。
+   实测同一句话（正常 5.02 s）：0.6 → 8.65 s、0.8 → 6.27 s、1.3 → 4.24 s，
+   四档之间都听得出差别。 */
+const SPEAK_SPEEDS = [['很慢', 0.6], ['慢', 0.8], ['正常', 1], ['快', 1.3]];
+function renderSpeakSpeed() {
+  const box = $('#speakSpeed');
+  if (!box.childElementCount) {
+    box.innerHTML = SPEAK_SPEEDS.map(([zh, v]) =>
+      `<button type="button" data-v="${v}" title="说这句话的快慢。${zh}=正常的 ${Math.round(100 / v)}% 时长">${zh}</button>`).join('');
+    box.onclick = e => {
+      const b = e.target.closest('button[data-v]');
+      if (!b || Number(b.dataset.v) === S.speakSpeed) return;
+      S.speakSpeed = Number(b.dataset.v);
+      localStorage.ssSpeakSpeed = String(S.speakSpeed);
+      // 🔴 换了语速，上一版当场作废 —— 和「改了输入框」同一条：留着它
+      // 等于让人存下一段和屏幕上不一样的音频。
+      dropTake();
+      renderSpeakSpeed(); speakCount();
+    };
+  }
+  [...box.children].forEach(b => b.classList.toggle('on', Number(b.dataset.v) === S.speakSpeed));
+}
 /* 插到**光标处**而不是末尾：标签的用法就是「在这个位置换个说法」，
    官方例句 "I can't believe it [gasp] you actually did it [laugh]" 正是如此。 */
 function insertTag(tag) {
@@ -2288,6 +2315,9 @@ async function speakSynthesize(text) {
   const f = await speakSettings();
   const body = { text, format: 'wav' };      // 🔴 要 WAV：这段还要被散布、导出时
   if (f.voice) body.reference_id = f.voice;  // 再编一次 AAC，没理由先白扔一代
+  // 🔴 正常语速**一个字节都不多写**：请求体和加这功能之前逐字节一致，
+  // 所以没选语速的人不可能被这次改动影响。
+  if (S.speakSpeed !== 1) body.prosody = { speed: S.speakSpeed };
   const r = await fetch('/fish/v1/tts', {
     method: 'POST', headers: { 'Content-Type': 'application/json',
       Authorization: 'Bearer ' + f.key, model: FISH_MODEL },
@@ -2412,6 +2442,10 @@ async function speakSave() {
 
 /* 开关记在本地：这是「我平时要不要顺手下到那台 Mac」的偏好，不是某一次的选择。 */
 S.speakPull = localStorage.ssSpeakPull !== '0';
+// 语速同理：这是「我平时喜欢多快」的偏好，不是某一次的选择。认不出的值退回正常，
+// 免得 localStorage 被写坏之后每次合成都带一个 fish 会拒绝的参数。
+S.speakSpeed = SPEAK_SPEEDS.some(([, v]) => v === Number(localStorage.ssSpeakSpeed))
+  ? Number(localStorage.ssSpeakSpeed) : 1;
 S.spk = null; S.spkBusy = false;
 $('#speakPullRow').onclick = () => {
   S.speakPull = !S.speakPull;
