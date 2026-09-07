@@ -621,7 +621,7 @@ nav .ni{font-size:16px;line-height:1}
     <div class="sbody scroll">
       <textarea id="speakText" class="linput" rows="3" placeholder="打一句要说的话"
         style="resize:none;line-height:1.6;padding:10px 12px;height:auto;font-family:inherit"></textarea>
-      <div class="tagrow"><button class="mini acc" id="bSpeakAi">阴阳一下</button></div>
+      <div class="tagrow"><button class="mini acc" id="bSpeakAi">阴阳一下</button><button class="mini acc" id="bSpeakTag">加语气</button></div>
       <div class="tagrow" id="speakTags"></div>
       <div class="seg wide" id="speakSpeed"></div>
       <!-- 🔴 试听在**这台设备**上响，音频还在浏览器手里，谁的盘上都没有。
@@ -2220,6 +2220,7 @@ function openSpeak() {
   renderSpeakTags();
   renderSpeakSpeed();
   renderAi();
+  renderTag();
   speakCount();
   $('#mSpeak').classList.remove('hide');
   setTimeout(() => $('#speakText').focus(), 60);
@@ -2233,7 +2234,7 @@ function speakCount() {
   el.textContent = n > SPEAK_MAX ? `${n} 字，超过 ${SPEAK_MAX} 字上限`
     : has ? speakSaveNote()
     : !n ? '还没输入' : `${n} / ${SPEAK_MAX} 字`;
-  go.disabled = S.spkBusy || S.dsBusy || (!has && (!n || n > SPEAK_MAX));
+  go.disabled = S.spkBusy || S.dsBusy || S.tagBusy || (!has && (!n || n > SPEAK_MAX));
   go.textContent = S.spkBusy ? '生成中…' : has ? '存下来' : '生成';
   $('#bSpeakAgain').classList.toggle('hide', !has || S.spkBusy);
 }
@@ -2411,11 +2412,10 @@ function dsFail(status, message) {
   return `写不出来（HTTP ${status}）${message ? '：' + message : ''}`;
 }
 
-async function dsWrite(seed, angle) {
+/* 两条路（阴阳 / 加语气）共用这一次请求。两份拷贝迟早分家，而分家的那份
+   恰好是不常走的那份 —— 超时、错误翻译、关推理都只该有一处。 */
+async function dsChat(system, user) {
   const f = await speakSettings();
-  // 兜底而不是崩：漏传角度的话上面那个 catch 会把它说成「想太久了」，
-  // 一个下标错误伪装成网络问题是最难查的那种。
-  const [angleName, angleHow] = DS_ANGLES[angle] || DS_ANGLES[DS_ANGLES.length - 1];
   if (!f.dsKey) throw new Error('服务端还没填 DeepSeek 的 key（ss_settings.dsKey）');
   // 推理长的时候真能跑到十几秒，别用默认超时把一次正常的改写掐死。
   const ac = new AbortController();
@@ -2428,9 +2428,7 @@ async function dsWrite(seed, angle) {
       body: JSON.stringify({
         model: f.dsModel || DS_MODEL, max_tokens: DS_MAX_TOKENS, temperature: DS_TEMP,
         thinking: DS_THINKING,
-        messages: [{ role: 'system', content: DS_SYSTEM
-          + `\n\n这一版用「${angleName}」这种说法：${angleHow}` },
-          { role: 'user', content: seed }],
+        messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
       }),
     });
   } catch (e) {
@@ -2438,12 +2436,24 @@ async function dsWrite(seed, angle) {
   } finally { clearTimeout(timer); }
   const body = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(dsFail(r.status, (body.error || {}).message || body.message));
-  const choice = (body.choices || [])[0] || {};
-  const line = cleanScript((choice.message || {}).content);
-  // 🔴 空手而归**几乎总是「推理把额度用光了」**，不是它没话说。说清楚是哪一种，
-  // 否则下一步会有人去改人设，而该做的只是再点一次。
-  if (!line) throw new Error(choice.finish_reason === 'length'
+  return (body.choices || [])[0] || {};
+}
+/* 🔴 空手而归**几乎总是「推理把额度用光了」**，不是它没话说。说清楚是哪一种，
+   否则下一步会有人去改人设，而该做的只是再点一次。 */
+function dsText(choice) {
+  const raw = String((choice.message || {}).content || '');
+  if (!raw.trim()) throw new Error(choice.finish_reason === 'length'
     ? '它自己想太多，把额度想没了，再点一次' : 'DeepSeek 这次什么都没写出来，再点一次');
+  return raw;
+}
+
+async function dsWrite(seed, angle) {
+  // 兜底而不是崩：漏传角度的话上面那个 catch 会把它说成「想太久了」，
+  // 一个下标错误伪装成网络问题是最难查的那种。
+  const [angleName, angleHow] = DS_ANGLES[angle] || DS_ANGLES[DS_ANGLES.length - 1];
+  const choice = await dsChat(DS_SYSTEM + `\n\n这一版用「${angleName}」这种说法：${angleHow}`, seed);
+  const line = cleanScript(dsText(choice));
+  if (!line) throw new Error('DeepSeek 这次什么都没写出来，再点一次');
   return line;
 }
 
@@ -2451,7 +2461,7 @@ async function dsWrite(seed, angle) {
 function aiLabel() {
   const raw = $('#speakText').value.trim();
   if (S.dsBusy) return { t: '正在阴阳…', on: false };
-  if (S.spkBusy) return { t: '阴阳一下', on: false };
+  if (S.spkBusy || S.tagBusy) return { t: '阴阳一下', on: false };
   if (!raw) return { t: '先写点什么', on: false };
   if (S.dsOut && raw === S.dsOut) return { t: '再阴阳一版', on: true };
   return { t: '阴阳一下', on: true };
@@ -2486,6 +2496,94 @@ async function speakAi() {
     $('#speakErr').classList.remove('hide');
   } finally {
     S.dsBusy = false; renderAi(); speakCount();
+  }
+}
+
+/* ---------- 让 DeepSeek 只标语气，一个字不改 ---------- */
+/* 标签本来就得一枚一枚手动点，而「这句话该在哪儿叹口气」恰恰是要**读懂意思**
+   才知道的事。所以这里问的是和「阴阳一下」完全不同的另一个问题：
+   **内容你别碰，只告诉我怎么说。** 两个动作因此并排、同一层级。
+
+   🔴 **唯一会悄悄坏掉的是它顺手改词。** 改一两个字用户根本看不出来，而存下去的
+   语音就不再是他要说的那句话了 —— 这种坏法没有任何报错。所以不靠人设保证：
+   剥掉标签之后必须和原文**逐字相同**，对不上就整版不采用（`keepTags`）。
+   实测 36 次一字未改（连输入里的错别字「海子」都没被"帮忙"改成「孩子」），
+   但按定义坏的那次就是罕见的那次，判据得一直在。 */
+
+/* 🔴 标签清单和人设里那份**同源**，都从 SPEAK_TAGS 长出来 —— 写死第二份的话，
+   哪天改了胶囊，人设还在教模型用一个已经没有的标签。 */
+const TAG_NAMES = SPEAK_TAGS.map(([, t]) => t.slice(1, -1));
+const stripTags = s => String(s || '').replace(/\[[^\]]*\]/g, '');
+/* 比对口径：连空白和 markdown 符号一起去掉。模型爱在标签后面加个空格
+   （官方例句也这么写），偶尔还会写 `**[sighing]**` —— 那都不算改词。
+   两边同一个口径，否则原文里本来就有的符号会被误判成「它改了」。 */
+const bareWords = s => stripTags(s).replace(/[*`#~\s]/g, '').trim();
+const hasTag = s => new RegExp('\\[(' + TAG_NAMES.join('|') + ')\\]').test(String(s || ''));
+
+const TAG_SYSTEM = `你的任务：给用户这句话加上语音标签，让它被朗读出来的时候有对的语气。
+
+🔴 一个字都不许改。不能增字、不能删字、不能换标点、不能调整语序。你只能在原文的字与字之间插入标签。
+
+只能用这几个：
+${SPEAK_TAGS.map(([zh, t]) => `${t} ${zh}`).join('　')}
+
+标签放在它管的那段话前面。一句话通常一到三个就够，不要每句都塞。
+
+只输出加了标签的那句话本身，不要解释、不要引号、不要换行。`;
+
+/* 纯函数，`tagtest` 自检的就是它。只留认识的标签，然后确认一个字都没被改；
+   对不上返回 null —— 宁可这一版不采用，也不能悄悄换掉用户的词。 */
+function keepTags(orig, out) {
+  const cleaned = String(out || '')
+    .replace(/\[([^\]]*)\]/g, (m, t) => TAG_NAMES.includes(t.trim()) ? `[${t.trim()}]` : '')
+    .replace(/[*`#~]/g, '')
+    .replace(/[ \t]+/g, ' ')
+    .trim();
+  if (!cleaned || !bareWords(cleaned) || bareWords(cleaned) !== bareWords(orig)) return null;
+  return cleaned;
+}
+
+/* 按钮**脸上**就是状态：手机上没有 hover，禁用的理由不能只写在 title 里。 */
+function tagLabel() {
+  const raw = $('#speakText').value.trim();
+  if (S.tagBusy) return { t: '正在听…', on: false };
+  if (S.dsBusy || S.spkBusy) return { t: '加语气', on: false };
+  if (!raw) return { t: '先写点什么', on: false };
+  if (raw.length > SPEAK_MAX) return { t: '太长了', on: false };
+  return { t: hasTag(raw) ? '换一种语气' : '加语气', on: true };
+}
+function renderTag() {
+  const b = $('#bSpeakTag'), s = tagLabel();
+  b.textContent = s.t;
+  b.disabled = !s.on;
+  b.title = hasTag($('#speakText').value)
+    ? '重新标一遍：现在这些标签会被换掉，句子本身一个字不动'
+    : '让它读懂这句话，在合适的地方标上语气。句子本身一个字不动';
+}
+async function speakTag() {
+  const raw = $('#speakText').value.trim();
+  if (!raw || S.tagBusy || S.dsBusy || S.spkBusy || raw.length > SPEAK_MAX) return;
+  // 🔴 **先剥掉旧标签再送。** 实测：带着标签发过去，模型会**原样退回**
+  //（同一句连跑三次一模一样），于是「换一种语气」按下去什么都不会变，
+  // 从外面看就是按钮坏了。和「再阴阳一版拿的是原话」是同一条。
+  const base = stripTags(raw).replace(/\s+/g, ' ').trim();
+  if (!base) return;
+  S.tagBusy = true; $('#speakErr').classList.add('hide');
+  renderTag(); renderAi(); speakCount();
+  try {
+    let line = keepTags(base, dsText(await dsChat(TAG_SYSTEM, base)));
+    // 改了词就整版作废、再问一次；第二次还改就说出来，绝不悄悄采用。
+    if (!line) line = keepTags(base, dsText(await dsChat(TAG_SYSTEM, base)));
+    if (!line) throw new Error('它把你的词改了，这一版没要，再点一次');
+    $('#speakText').value = line;
+    // 🔴 程序改 value **不会**触发 oninput，所以上一版语音得自己扔 ——
+    // 标签也是发给 fish 的字节，不扔的话屏幕上是新的、存下去的是旧声音。
+    dropTake();
+  } catch (e) {
+    $('#speakErr').textContent = String(e.message || e);
+    $('#speakErr').classList.remove('hide');
+  } finally {
+    S.tagBusy = false; renderTag(); renderAi(); speakCount();
   }
 }
 
@@ -2638,6 +2736,7 @@ async function speakSave() {
 
 /* 开关记在本地：这是「我平时要不要顺手下到那台 Mac」的偏好，不是某一次的选择。 */
 S.dsBusy = false; S.dsSeed = ''; S.dsOut = ''; S.dsAngle = -1;
+S.tagBusy = false;
 S.speakPull = localStorage.ssSpeakPull !== '0';
 // 语速同理：这是「我平时喜欢多快」的偏好，不是某一次的选择。认不出的值退回正常，
 // 免得 localStorage 被写坏之后每次合成都带一个 fish 会拒绝的参数。
@@ -2652,9 +2751,11 @@ $('#speakPullRow').onclick = () => {
 // 🔴 改了文字，上一版就不再对应屏幕上这句话了 —— 留着它等于让人存下一段
 // 和输入框里不一样的音频（「抓完之后主按钮变完成」同一条理由）。
 $('#bSpeakAi').onclick = speakAi;
+$('#bSpeakTag').onclick = speakTag;
 $('#speakText').oninput = () => {
   if (S.spk && $('#speakText').value.trim() !== S.spk.text) dropTake();
   renderAi();
+  renderTag();
   speakCount();
 };
 $('#bSpeakPlay').onclick = () => {
