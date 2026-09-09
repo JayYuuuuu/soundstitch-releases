@@ -494,8 +494,9 @@ nav .ni{font-size:16px;line-height:1}
         <button data-t="shared">共享 0</button>
       </div>
       <div style="flex:1"></div>
-      <button class="mini" id="bSpeak" style="background:var(--card);border:.5px solid var(--line2);color:var(--accent)">生成语音</button>
-      <button class="mini" id="bAdd" style="background:var(--card);border:.5px solid var(--line2);color:var(--accent)">下载音频</button>
+      <button class="mini" id="bForge" style="background:var(--card);border:.5px solid var(--line2);color:var(--accent)">音效</button>
+      <button class="mini" id="bSpeak" style="background:var(--card);border:.5px solid var(--line2);color:var(--accent)">语音</button>
+      <button class="mini" id="bAdd" style="background:var(--card);border:.5px solid var(--line2);color:var(--accent)">下载</button>
     </div>
     <div class="pad hide" id="searchWrap" style="flex:none;padding-top:8px">
       <label class="search"><span style="color:var(--t3)">⌕</span>
@@ -645,6 +646,39 @@ nav .ni{font-size:16px;line-height:1}
       <div style="display:flex;gap:10px">
         <button class="btn sec hide" id="bSpeakAgain" style="flex:1;height:50px">重来一版</button>
         <button class="btn" id="bSpeakGo" style="flex:1.8" disabled>生成</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="mask hide" id="mForge">
+  <div class="sheet">
+    <div class="shead"><button id="forgeCancel">取消</button><span class="ttl">生成音效</span><span class="ph"></span></div>
+    <div class="sbody scroll">
+      <div class="seg wide" id="forgeKinds"></div>
+      <div style="font-size:13px;color:var(--t2)" id="forgeBlurb"></div>
+      <!-- 🔴 波形不是装饰：掷骰子本身没有声音以外的反馈，看得见形状变了才知道骰子真的动了。 -->
+      <canvas id="forgeWave" style="width:100%;height:64px;display:block;
+        background:var(--fill);border-radius:10px"></canvas>
+      <!-- 试听在**这台设备**上响，音频还在浏览器手里，谁的盘上都没有。 -->
+      <div class="list" id="forgeTry">
+        <div class="row">
+          <div class="ico" id="forgeIco"></div>
+          <div class="mid"><div class="nm ell" id="forgeTake">第 1 版</div>
+            <div class="sub ell" id="forgeSub">掷一次看看</div></div>
+          <button class="mini" id="bForgePlay">试听</button>
+        </div>
+      </div>
+      <div class="lab row2" id="forgePullRow" style="cursor:pointer;user-select:none;padding:2px 0"
+        title="共享是账号级的，哪台机器都够得着；散布和定时读的是本地文件，所以要拿它做拼接就得下到那台 Mac">
+        <span style="font-size:13px;color:var(--t2)" id="forgePullLab">同时下到 —</span>
+        <span class="sw on" id="forgePullSw"><i></i></span>
+      </div>
+      <div id="forgeErr" class="concl bad hide"></div>
+      <div class="concl mut" id="forgeNote">—</div>
+      <div style="display:flex;gap:10px">
+        <button class="btn sec" id="bForgeAgain" style="flex:1;height:50px">换一版</button>
+        <button class="btn" id="bForgeGo" style="flex:1.8">存下来</button>
       </div>
     </div>
   </div>
@@ -2008,13 +2042,21 @@ function renderItems() {
   const many = (S.itemTab === 'local' ? S.items : S.shared).length > 12;
   $('#searchWrap').classList.toggle('hide', !many);
   $('#auditNote').classList.toggle('hide', S.itemTab !== 'shared');
-  $('#bAdd').textContent = S.itemTab === 'local' ? '下载音频' : '上传本机';
+  $('#bAdd').textContent = S.itemTab === 'local' ? '下载' : '上传本机';
+  $('#bAdd').title = S.itemTab === 'local'
+    ? '粘一条链接，让那台 Mac 自己去下载' : '字节在 Mac 上，网页手里没有文件';
+  // 🔴 三个按钮的名字压到两个字，是因为它们和左边那对标签挤同一行 —— 390 的
+  // 屏幕上「生成音效 / 生成语音 / 下载音频」放不下（实测会横向溢出）。
+  // 完整说法进 title；这三个连起来读正好是「素材从哪儿来」的三条路。
+  const fg = $('#bForge');
+  fg.classList.toggle('hide', S.itemTab !== 'local');
+  fg.title = '选个类型掷一次，当场就能听；满意了再决定存不存';
   // 🔴 生成语音不再卡设备版本：合成在浏览器里、存进共享也不经过任何 Mac，
   // 一台设备都没有照样能用。只有「同时下到那台机器」才需要它在线且够新。
   const spk = $('#bSpeak');
   spk.classList.toggle('hide', S.itemTab !== 'local');
   spk.disabled = false;
-  spk.textContent = '生成语音';
+  spk.textContent = '语音';
   spk.style.opacity = '';
   spk.title = '打一句话，当场就能听；满意了再决定存不存';
   if (S.itemTab === 'shared') return renderShared();
@@ -2700,23 +2742,12 @@ async function speakSave() {
   S.spkBusy = true; $('#speakErr').classList.add('hide'); speakCount();
   try {
     const name = speakTitle(s.text);
-    const buf = await s.blob.arrayBuffer();
-    const sha = [...new Uint8Array(await crypto.subtle.digest('SHA-256', buf))]
-      .map(b => b.toString(16).padStart(2, '0')).join('');
-    const fd = new FormData();
-    fd.append('owner', S.uid);
-    fd.append('name', name);
-    fd.append('file', s.blob, name + '.wav');
-    fd.append('duration', String(Math.round(s.dur * 1000) / 1000));
-    fd.append('fileSize', String(s.blob.size));
-    fd.append('sha256', sha);
-    fd.append('sourceDevice', '控制台');
     // 🔴 **文件名只剩前 14 个字，而阴阳话的力道全在后半句。** 存之前它只活在
     // 输入框里，存完就再也找不回来了——想知道这条说了什么只能一条条听。
     // `source` 是那句原始流水账：有它才知道这句是从哪儿改来的，也才能重编。
-    fd.append('text', s.text);
-    if (S.dsSeed && S.dsOut === s.text) fd.append('source', S.dsSeed);
-    const rec = await api('/api/collections/ss_shared/records', { method: 'POST', body: fd });
+    const extra = { text: s.text };
+    if (S.dsSeed && S.dsOut === s.text) extra.source = S.dsSeed;
+    const rec = await uploadTake(s.blob, name, s.dur, extra);
     // 下到 Mac 走现成的 pull —— 它会按 sha256 先看本机有没有同一份，然后登记
     // 进可播清单。这条路本来就在，不需要为语音另开一条。
     if (speakPullable()) cmd('pull', { itemId: rec.id });
@@ -2771,6 +2802,305 @@ $('#bSpeakAgain').onclick = speakGenerate;
 $('#speakCancel').onclick = () => { dropTake(); $('#mSpeak').classList.add('hide'); };
 $('#bSpeak').onclick = openSpeak;
 $('#bSpeakGo').onclick = () => S.spk ? speakSave() : speakGenerate();
+
+/* 把浏览器手里的一段音频传进共享库（账号级）。
+ *
+ * 🔴 生成语音和生成音效共用这一份 —— 两个上传各写一遍，迟早分家，而分家的那份
+ * 恰好是不常走的那个。调用方只决定名字、附带字段，以及要不要顺手 pull 到某台 Mac。
+ * 🔴 `api()` 遇到 FormData 不会写 Content-Type：boundary 是浏览器生成的。 */
+async function uploadTake(blob, name, durSec, extra) {
+  const buf = await blob.arrayBuffer();
+  const sha = [...new Uint8Array(await crypto.subtle.digest('SHA-256', buf))]
+    .map(b => b.toString(16).padStart(2, '0')).join('');
+  const fd = new FormData();
+  fd.append('owner', S.uid);
+  fd.append('name', name);
+  fd.append('file', blob, name + '.wav');
+  fd.append('duration', String(Math.round(durSec * 1000) / 1000));
+  fd.append('fileSize', String(blob.size));
+  fd.append('sha256', sha);
+  fd.append('sourceDevice', '控制台');
+  for (const k in (extra || {})) fd.append(k, extra[k]);
+  return api('/api/collections/ss_shared/records', { method: 'POST', body: fd });
+}
+
+/* ---------- 生成音效：合成也在浏览器里，一台 Mac 都不需要 ----------
+ *
+ * 和生成语音同一个壳子（掷、听、再掷，满意才存下来），但更彻底：语音要打一个
+ * 跨域接口（所以得在自家 Caddy 上转一道），**音效压根不联网** —— 它就是一段算术。
+ *
+ * 🔴 **这是同一套算术的第二份实现**，Swift 那份在 `SoundForge.swift`。
+ * 这个项目吃过「两份拷贝迟早分家」的亏，所以说清楚这次为什么可以有两份：
+ * 定时那种两份必须逐位一致，因为一份在预测、一份在执行，差一点就当场分家；
+ * 音效不是 —— **浏览器里响的那段声音，存下去就是那段字节**，Swift 那份根本不
+ * 参与。最坏结果是「网页里的顿击和 Mac 里的顿击略有不同」，不会出现听的是一个、
+ * 存的是另一个。即便如此还是加了一条两端对拍的自检（见 CLAUDE.md），防的是
+ * 哪天改了参数只改一边。
+ *
+ * 🔴 **每个数都是一个区间，种子决定这一掷落在哪。** 一个频率滑块恰好会把
+ * 「我对音乐一窍不通」的人挡在外面，而那正是要服务的人。 */
+const FORGE_SR = 44100;
+const FORGE_KINDS = [
+  { id: 'thud', name: '顿击', base: [34, 62],
+    ratios: [[1.38, 1.62], [2.08, 2.34], [3.12, 3.48]],
+    decay: [0.30, 0.60], noise: [0.20, 0.50], bright: [0.10, 0.28],
+    blurb: '楼板那种闷重的一下' },
+  { id: 'thump', name: '闷响', base: [50, 95],
+    ratios: [[1.25, 1.48], [1.72, 1.92]],
+    decay: [0.10, 0.22], noise: [0.70, 1.0], bright: [0.06, 0.16],
+    blurb: '东西掉地上' },
+  { id: 'knock', name: '敲击', base: [180, 300],
+    ratios: [[1.42, 1.68], [2.1, 2.6], [3.2, 3.9]],
+    decay: [0.12, 0.26], noise: [0.12, 0.32], bright: [0.25, 0.50],
+    blurb: '木头、桌面' },
+  { id: 'metal', name: '金属', base: [430, 780],
+    ratios: [[1.52, 1.88], [2.32, 2.86], [3.42, 3.88], [5.18, 5.84]],
+    decay: [0.90, 2.20], noise: [0.04, 0.14], bright: [0.50, 0.85],
+    blurb: '有余音，拖几秒' },
+  { id: 'click', name: '脆响', base: [900, 1600],
+    ratios: [[1.62, 1.88], [2.62, 2.88]],
+    decay: [0.05, 0.13], noise: [0.15, 0.40], bright: [0.60, 0.95],
+    blurb: '短促，最扎耳朵' },
+];
+const forgeKind = id => FORGE_KINDS.find(k => k.id === id) || FORGE_KINDS[0];
+
+/* SplitMix64，和 Swift 侧同一个 `SeededGenerator`。BigInt 是必需的：
+   这套算术全程要 64 位环绕，用 Number 一乘就丢精度，两端立刻分家。 */
+const U64 = (1n << 64n) - 1n;
+function forgeRng(seed) { return { s: seed === 0n ? 0x4D595DF4D0F33173n : seed & U64 }; }
+function forgeBits(g) {
+  g.s = (g.s + 0x9E3779B97F4A7C15n) & U64;
+  let z = g.s;
+  z = ((z ^ (z >> 30n)) * 0xBF58476D1CE4E5B9n) & U64;
+  z = ((z ^ (z >> 27n)) * 0x94D049BB133111EBn) & U64;
+  return (z ^ (z >> 31n)) & U64;
+}
+/* 取高 53 位铺成 [0,1)，和 Swift 侧的 `SeededGenerator.spread` 一模一样。
+   🔴 **Swift 那边特意没用 `Double.random(in:using:)`**：它内部有拒绝采样，实测
+   偶尔会吃两个随机数（20 万次调用吃了 200093 个）。那样两端会以最难查的方式分家 ——
+   前 848 个采样逐位一致，第 849 个开始全不一样。这条映射两边都写死，谁都不依赖
+   标准库的实现细节。 */
+const TWO_M53 = Math.pow(2, -53);
+const fpick = (g, r) => r[0] + (r[1] - r[0]) * (Number(forgeBits(g) >> 11n) * TWO_M53);
+const FORGE_PM1 = [-1, 1];
+
+/* 模态合成：被敲的物体同时以若干衰减正弦振动。材质差别几乎全在「高频衰减多快」。
+   🔴 泛音比故意**不成整数倍** —— 成了就是乐音，而乐音是另一个品类。 */
+function forgeRender(kind, seed) {
+  const g = forgeRng(BigInt(seed));
+  const f0 = fpick(g, kind.base);
+  const partials = [f0].concat(kind.ratios.map(r => f0 * fpick(g, r)));
+  const dec = fpick(g, kind.decay);
+  const bright = fpick(g, kind.bright);
+  const decays = partials.map((_, i) => dec * Math.pow(bright, i));
+  const gains = partials.map((_, i) => Math.pow(bright, i * 0.8));
+  const noise = fpick(g, kind.noise);
+  const duration = Math.min(3, dec * 3.2 + 0.05);
+  const n = Math.trunc(FORGE_SR * duration);
+  const out = new Float32Array(n);
+  let lp = 0;
+  for (let i = 0; i < n; i++) {
+    const t = i / FORGE_SR;
+    let v = 0;
+    for (let j = 0; j < partials.length; j++)
+      v += gains[j] * Math.sin(2 * Math.PI * partials[j] * t) * Math.exp(-t / decays[j]);
+    // 触碰噪声，低通且掉得比泛音快：这是「碰到了」，不是一层纹理。
+    lp += 0.3 * (fpick(g, FORGE_PM1) - lp);
+    v += noise * lp * Math.exp(-t / (dec * 0.12));
+    out[i] = v;
+  }
+  // 峰值归一留 headroom。不是响度对齐 —— 这些是撞击，把峰值抹平正好把撞击抹平了。
+  let peak = 0;
+  for (let i = 0; i < n; i++) peak = Math.max(peak, Math.abs(out[i]));
+  if (peak > 1e-9) {
+    const scale = Math.fround(Math.fround(0.89) / peak);
+    for (let i = 0; i < n; i++) out[i] *= scale;
+  }
+  return { kind, seed, f0, duration, samples: out };
+}
+
+/* 16-bit 单声道 WAV。一两秒的东西没有体积问题，无损意味着反复散布不会叠加编码代数。 */
+function wavBlob(samples, sr) {
+  const n = samples.length, buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf);
+  const tag = (o, str) => { for (let i = 0; i < str.length; i++) v.setUint8(o + i, str.charCodeAt(i)); };
+  tag(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); tag(8, 'WAVE');
+  tag(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, sr, true); v.setUint32(28, sr * 2, true);
+  v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  tag(36, 'data'); v.setUint32(40, n * 2, true);
+  for (let i = 0; i < n; i++) {
+    const x = Math.max(-1, Math.min(1, samples[i]));
+    v.setInt16(44 + i * 2, Math.round(x * 32767), true);
+  }
+  return new Blob([buf], { type: 'audio/wav' });
+}
+
+const forgeFileName = t => `${t.kind.name} ${Math.round(t.f0)}Hz`;
+
+function openForge() {
+  $('#forgeErr').classList.add('hide');
+  dropForge();
+  renderForgeKinds();
+  $('#mForge').classList.remove('hide');
+  // 掷完自动播，和 Mac 上一样：整个循环是「掷、听、再掷」，中间插一个「按播放」
+  // 就把骰子和答案隔开了。开弹窗本身是一次点击，所以 iOS 不会拦这一下。
+  forgeRoll();
+}
+
+function renderForgeKinds() {
+  const box = $('#forgeKinds');
+  if (!box.childElementCount) {
+    box.innerHTML = FORGE_KINDS.map(k =>
+      `<button type="button" data-k="${k.id}" title="${esc(k.blurb)}">${k.name}</button>`).join('');
+    box.onclick = e => {
+      const b = e.target.closest('button[data-k]');
+      if (!b || b.dataset.k === S.forgeKind) return;
+      S.forgeKind = b.dataset.k;
+      localStorage.ssForgeKind = S.forgeKind;
+      renderForgeKinds();
+      forgeRoll();                       // 换了类型，上一版当然不再是你要的那个
+    };
+  }
+  [...box.children].forEach(b => b.classList.toggle('on', b.dataset.k === S.forgeKind));
+  $('#forgeBlurb').textContent = forgeKind(S.forgeKind).blurb;
+}
+
+function dropForge() {
+  if (S.fg) { try { S.fg.audio.pause(); } catch {} URL.revokeObjectURL(S.fg.url); }
+  S.fg = null; S.fgBusy = false;
+}
+
+function renderForge() {
+  const s = S.fg;
+  $('#forgeIco').textContent = s && !s.audio.paused ? '🎧' : '';
+  $('#forgeTake').textContent = s ? `第 ${s.take} 版` : '掷一次看看';
+  $('#forgeSub').textContent = !s ? '—'
+    : !s.audio.paused ? `在这台设备上播放 ${fmt(s.audio.currentTime)} / ${dur(s.dur)}`
+    : `${Math.round(s.f0)} Hz · ${dur(s.dur)} · 在这台设备上试听`;
+  $('#bForgePlay').textContent = s && !s.audio.paused ? '停' : '试听';
+  $('#bForgePlay').disabled = !s;
+  const p = current();
+  $('#forgePullLab').textContent = p ? `同时下到 ${shortName(deviceName(p))}` : '同时下到 —（没有设备）';
+  $('#forgePullSw').classList.toggle('on', S.forgePull && !!p);
+  $('#bForgeGo').disabled = !s || S.fgBusy;
+  $('#bForgeGo').textContent = S.fgBusy ? '存…' : '存下来';
+  $('#bForgeAgain').disabled = S.fgBusy;
+  $('#forgeNote').textContent = S.fgBusy ? '正在存…' : forgeSaveNote();
+  drawForgeWave();
+}
+
+/* 存下来会发生什么，说在按下之前 —— 和生成语音同一条。 */
+function forgeSaveNote() {
+  const p = current();
+  if (!forgePullable()) {
+    const why = !p ? '没有设备' : !isLive(p) ? deviceName(p) + ' 不在线'
+              : !canShare(p) ? deviceName(p) + ' 需更新' : '';
+    return S.forgePull && why ? `存进共享 · ${why}，下不到本机` : '存进共享，手机上还能再听';
+  }
+  return `存进共享，并下到 ${shortName(deviceName(p))}`;
+}
+const forgePullable = () => {
+  const p = current();
+  return !!(S.forgePull && p && isLive(p) && canShare(p));
+};
+
+/* 波形：桶内取峰值画一根竖线，和 Mac 上那份同一个做法。 */
+function drawForgeWave() {
+  const c = $('#forgeWave'), dpr = window.devicePixelRatio || 1;
+  const w = Math.max(1, Math.round(c.clientWidth * dpr)), h = Math.round(64 * dpr);
+  if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+  const g = c.getContext('2d');
+  g.clearRect(0, 0, w, h);
+  const a = S.fg && S.fg.samples;
+  if (!a || !a.length) return;
+  g.strokeStyle = getComputedStyle(document.documentElement)
+    .getPropertyValue('--accent').trim() || '#0a84ff';
+  g.lineWidth = Math.max(1, dpr);
+  const cols = Math.max(1, Math.floor(w / (2 * dpr))), bucket = Math.max(1, Math.floor(a.length / cols));
+  g.beginPath();
+  for (let col = 0; col < cols; col++) {
+    const from = col * bucket;
+    if (from >= a.length) break;
+    let peak = 0;
+    for (let i = from, to = Math.min(a.length, from + bucket); i < to; i++)
+      peak = Math.max(peak, Math.abs(a[i]));
+    const x = w * col / cols, half = h * 0.44 * peak;
+    g.moveTo(x, h / 2 - half); g.lineTo(x, h / 2 + half);
+  }
+  g.stroke();
+}
+
+function forgeRoll() {
+  if (S.fgBusy) return;
+  const take = (S.fg ? S.fg.take : 0) + 1;
+  dropForge();
+  $('#forgeErr').classList.add('hide');
+  try {
+    // 种子只掷到 2^31，和 Mac 上那份一致；BigInt 的入口就在这里。
+    const seed = 1 + Math.floor(Math.random() * 0x7ffffffe);
+    const t = forgeRender(forgeKind(S.forgeKind), seed);
+    const blob = wavBlob(t.samples, FORGE_SR);
+    const url = URL.createObjectURL(blob);
+    const audio = new Audio(url);
+    S.fg = { blob, url, audio, samples: t.samples, f0: t.f0, dur: t.samples.length / FORGE_SR,
+             seed, kindId: t.kind.id, name: forgeFileName(t), take };
+    audio.onended = renderForge;
+    audio.ontimeupdate = () => { if (!S.fg) return; $('#forgeSub').textContent =
+      `在这台设备上播放 ${fmt(audio.currentTime)} / ${dur(S.fg.dur)}`; };
+    renderForge();
+    audio.play().then(renderForge).catch(() => {});
+  } catch (e) {
+    $('#forgeErr').textContent = '这一版没生成出来：' + String(e.message || e);
+    $('#forgeErr').classList.remove('hide');
+    renderForge();
+  }
+}
+
+/* 存下来 = 传进共享（账号级，手机上还能再听）；要拿它做拼接 / 定时才需要下到 Mac。 */
+async function forgeSave() {
+  const s = S.fg; if (!s || S.fgBusy) return;
+  S.fgBusy = true; $('#forgeErr').classList.add('hide'); renderForge();
+  try {
+    const rec = await uploadTake(s.blob, s.name, s.dur, null);
+    if (forgePullable()) cmd('pull', { itemId: rec.id });
+    dropForge();
+    $('#mForge').classList.add('hide');
+    switchItemTab('shared');
+    loadShared().then(renderItems).catch(() => {});
+  } catch (e) {
+    S.fgBusy = false;
+    const m = String(e.message || e);
+    $('#forgeErr').textContent = /sha256|unique|已存在/i.test(m)
+      ? '共享里已经有一份一模一样的了' : m;
+    $('#forgeErr').classList.remove('hide');
+    renderForge();
+  }
+}
+
+S.fg = null; S.fgBusy = false;
+// 偏好记在本地：这是「我平时要不要顺手下到那台 Mac」和「我常做哪一种」，
+// 不是某一次的选择。认不出的类型退回第一个。
+S.forgePull = localStorage.ssForgePull !== '0';
+S.forgeKind = FORGE_KINDS.some(k => k.id === localStorage.ssForgeKind)
+  ? localStorage.ssForgeKind : FORGE_KINDS[0].id;
+$('#forgePullRow').onclick = () => {
+  S.forgePull = !S.forgePull;
+  localStorage.ssForgePull = S.forgePull ? '1' : '0';
+  renderForge();
+};
+$('#bForgePlay').onclick = () => {
+  const s = S.fg; if (!s) return;
+  if (s.audio.paused) s.audio.play().then(renderForge).catch(() => {
+    $('#forgeErr').textContent = '浏览器拦下了播放，再点一次「试听」';
+    $('#forgeErr').classList.remove('hide');
+  });
+  else s.audio.pause();
+  renderForge();
+};
+$('#bForgeAgain').onclick = forgeRoll;
+$('#bForgeGo').onclick = forgeSave;
+$('#forgeCancel').onclick = () => { dropForge(); $('#mForge').classList.add('hide'); };
+$('#bForge').onclick = openForge;
 
 function uploadPick() {
   const p = current();
