@@ -622,7 +622,7 @@ nav .ni{font-size:16px;line-height:1}
     <div class="sbody scroll">
       <textarea id="speakText" class="linput" rows="3" placeholder="打一句要说的话"
         style="resize:none;line-height:1.6;padding:10px 12px;height:auto;font-family:inherit"></textarea>
-      <div class="tagrow"><button class="mini acc" id="bSpeakAi">阴阳一下</button><button class="mini acc" id="bSpeakTag">加语气</button></div>
+      <div class="tagrow"><button class="mini acc" id="bSpeakAi">骂回去</button><button class="mini acc" id="bSpeakTag">加语气</button></div>
       <div class="tagrow" id="speakTags"></div>
       <div class="seg wide" id="speakSpeed"></div>
       <!-- 🔴 试听在**这台设备**上响，音频还在浏览器手里，谁的盘上都没有。
@@ -2377,26 +2377,27 @@ const DS_MAX_TOKENS = 3000;
  * 而且 16 次里编出过一个不存在的标签（`[d出]`）。1.0 的话一样有花样。 */
 const DS_TEMP = 1.0;
 
-/* 人设。字数和说法全交给它自己发挥，这里只钉死三件会毁掉素材的事：
-   够短（要在一小时里反复响）、不带脏字（这话是要放给邻居听的）、
-   只输出那段话本身（多一个字的解释都会被念出来）。 */
-const DS_SYSTEM = `你是楼下那个被吵了很久的邻居。用户会把他的火气原样写给你，你替他把这句话说得客客气气，但让楼上听着难受。
+/* 人设（2026-09-23 从「阴阳一下」换成「骂回去」，用户原话：「和没素质的人不要客气」）。
+   脏字放开了，钉死的仍是会毁掉素材或惹出大事的几件：只骂大人、不威胁动手、
+   不编他没说的事、只输出那段话本身（多一个字的解释都会被念出来）。 */
+const DS_SYSTEM = `你是楼下那个被吵了很久、已经忍无可忍的邻居。用户会把他的火气写给你，你替他骂回去：直接、难听、不客气，让楼上一听就知道说的是他们家。
 
-写一两句口语，像真的隔着天花板在跟人说话——不是写段子，不堆排比，也不必把他说的每个细节都塞进去。说完就停。
+写一两句口语，像真的冲着天花板吼出来的——可以带脏字，可以骂人没素质、没教养、不要脸。说完就停，不堆排比，不讲道理。
 
-三条底线：不许脏字、不许威胁；不许编他没说的事（他没给次数就别报次数，没说几点就别说几点）；话是对楼上那家人说的，别拐去说物业。
+三条底线：只骂楼上那几个大人，不骂小孩、不扯人家祖宗八代和地域；不许威胁动手、不许说要弄死谁；不许编他没说的事（他没给次数就别报次数，没说几点就别说几点）。
 
 照着这几个的样子写（只学口气和长短，别套用里面的词）：
 
 他说：楼上装修，从早上八点电钻响到晚上，说了好几次了
-你写：您这装修真讲究，从早响到晚。我在家办公，跟着也学了不少手艺。
+你写：[angry]装你妈的修，一天到晚钻钻钻，说了几遍都当放屁是吧？
 
 他说：半夜两点还在大声说话打游戏，我们家隔音又差
-你写：两点了还这么有精神啊。您几位聊得开心，我在楼下也听全了。
+你写：[angry]两点了还嚎！你们家是没人要睡觉，还是没人长脑子？
 
 他说：小孩天天在客厅拍球，跟他们说了也没用
-你写：孩子爱运动是好事。就是那球，好像比我家天花板结实。
+你写：[angry]孩子不懂事，你们当大人的也不懂事？天天拍，拍你个头！
 
+可以在句首或句中用这几个语气标签：[angry] [emphasis] [pause]。
 只输出那句话本身。不要引号、不要解释、不要emoji、不要换行。`;
 
 /* 🔴 **光在人设里写「别套路」没用。** 实测：同一句输入连跑 10 次，10 条里 8 条
@@ -2409,18 +2410,18 @@ const DS_SYSTEM = `你是楼下那个被吵了很久的邻居。用户会把他�
  * 🔴 **摇下一版时避开上一次那个角度**（`pickAngle`）。最需要换个说法的时刻正是
  * 「再阴阳一版」，不避开的话有七分之一的概率原地打转。散布引擎的 avoidRepeat 同理。 */
 const DS_ANGLES = [
-  ['顺着说', '顺着他的话往下说，说到荒唐的地方停住。'],
-  ['替他操心', '替他担心一件其实不该你担心的事。'],
-  ['装糊涂', '故意把这动静当成别的事，然后恍然大悟。'],
-  ['怪自己', '把责任揽到自己身上，反着说。'],
-  ['轻描淡写', '只把事情说一遍，不带情绪，说完就停。'],
-  ['问一句', '就问一句，问完不解释、不补充。'],
+  ['直接骂', '开口就骂，一句话骂到点上。'],
+  ['反问', '用反问骂，问得他没脸回答。'],
+  ['数落', '把他干的事数落一遍，骂他没素质。'],
+  ['嫌弃', '骂得带点看不起，像在说一家没教养的人。'],
+  ['吼一句', '越短越好，一两个短句吼完就停。'],
 ];
 /* 🔴 **禁令写进人设不等于它会照做。** 实测：人设里明写着「不许用闹钟」，
  * 新版 9 条里仍有 3 条写了「比闹钟还准时」——人设一变长，那行就被淹掉了。
  * 这种事能用一个正则判出来，就不该指望模型自觉：命中了自动重摇一版。
  * 只重一次——第二次还中就收下，让人对着转圈干等比看见一句烂比方更糟。 */
-const STALE = /闹钟|晨练|锻炼身体|活力满满|节奏感/;
+// 骂人版实测：9 条里 5 条都是「没长脑子」，听几遍就腻。
+const STALE = /没长脑子/;
 const hasStaleTrope = t => STALE.test(String(t || ''));
 
 /* 纯函数，`aitest` 自检的就是它。 */
@@ -2429,10 +2430,10 @@ function pickAngle(prev) {
   return pool[Math.floor(Math.random() * pool.length)];
 }
 
-/* 🔴 只留 prompt 里给过的那五个标签，别的方括号一律剥掉。
+/* 🔴 只留 prompt 里给过的那几个标签，别的方括号一律剥掉。
    实测它编出过 `[d出]` —— 认不出的标签 fish 多半会念出来，而那正是
    「这段素材毁了」的样子。引号也剥：模型偶尔会把整句括起来。 */
-const DS_TAGS = ['whispering', 'sighing', 'chuckling', 'emphasis', 'pause'];
+const DS_TAGS = ['angry', 'emphasis', 'pause'];
 function cleanScript(raw) {
   return String(raw || '')
     .replace(/\[([^\]]*)\]/g, (m, t) => DS_TAGS.includes(t.trim()) ? `[${t.trim()}]` : '')
@@ -2502,17 +2503,17 @@ async function dsWrite(seed, angle) {
 /* 按钮**脸上**就是状态：手机上没有 hover，禁用的理由不能只写在 title 里。 */
 function aiLabel() {
   const raw = $('#speakText').value.trim();
-  if (S.dsBusy) return { t: '正在阴阳…', on: false };
-  if (S.spkBusy || S.tagBusy) return { t: '阴阳一下', on: false };
+  if (S.dsBusy) return { t: '正在骂…', on: false };
+  if (S.spkBusy || S.tagBusy) return { t: '骂回去', on: false };
   if (!raw) return { t: '先写点什么', on: false };
-  if (S.dsOut && raw === S.dsOut) return { t: '再阴阳一版', on: true };
-  return { t: '阴阳一下', on: true };
+  if (S.dsOut && raw === S.dsOut) return { t: '再骂一版', on: true };
+  return { t: '骂回去', on: true };
 }
 function renderAi() {
   const b = $('#bSpeakAi'), s = aiLabel();
   b.textContent = s.t;
   b.disabled = !s.on;
-  b.title = S.dsSeed ? `照这句重编：${S.dsSeed}` : '写一句楼上干了什么，让它替你把话说得难听一点';
+  b.title = S.dsSeed ? `照这句重编：${S.dsSeed}` : '写一句楼上干了什么，让它替你骂回去';
 }
 async function speakAi() {
   const raw = $('#speakText').value.trim();
