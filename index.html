@@ -272,6 +272,11 @@ main{flex:1;min-height:0;display:flex;flex-direction:column}
                 border:.5px solid var(--line2);font-size:14px;font-weight:600;flex:none}
 .rowmenu>button.acc{color:var(--accent)}
 .rowmenu>button.bad{color:var(--bad);border-color:rgba(255,59,48,.35)}
+/* 素材分类条：一行横滑。选中态直接复用 .chip.sel 的实色强调底，不另写一套皮肤。 */
+.catbar{display:flex;gap:8px;overflow:auto hidden;touch-action:pan-x;flex:none;
+        padding:8px 14px 2px;scrollbar-width:none}
+.catbar::-webkit-scrollbar{display:none}
+.catbar .chip{height:32px;padding:0 13px;flex:none}
 .search{height:36px;border-radius:11px;background:var(--fill);display:flex;align-items:center;
         gap:8px;padding:0 12px;flex:none}
 .search input{flex:1;min-width:0;border:0;background:none;outline:none;font-size:14px}
@@ -502,6 +507,7 @@ nav .ni{font-size:16px;line-height:1}
       <label class="search"><span style="color:var(--t3)">⌕</span>
         <input id="q" placeholder="找素材" autocomplete="off"></label>
     </div>
+    <div class="catbar hide" id="catBar"></div>
     <div id="auditNote" class="pad hide" style="flex:none;padding-top:8px">
       <div style="display:flex;align-items:center;gap:7px;font-size:12px;color:var(--t2)">
         <span class="badge warn" style="height:18px;padding:0 6px;font-size:10px">!</span>
@@ -1495,6 +1501,11 @@ function giveUp(id, msg) {
  * 因为它们是逐秒对拍过的，重写等于把那份证据作废。 */
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
+/* localStorage 里的对象可能是脏的（手改过、旧版本留下的），读坏了就当没存。 */
+const readLS = (k, d) => {
+  try { const v = JSON.parse(localStorage[k] || ""); return v == null ? d : v; }
+  catch { return d; }
+};
 const S = {
   url: localStorage.ssUrl || 'https://baihe.yujiev.com:54812',
   token: localStorage.ssToken || '',
@@ -1508,6 +1519,8 @@ const S = {
   audio: null, auditioning: null, auditionErr: '', auditionErrID: null, auditionTimer: null,
   devTarget: null, compact: false, endMode: null, openHist: null, itemSig: null,
   authAt: 0, uid: localStorage.ssUid || '', fish: null, spk: null, spkBusy: false,
+  /* 素材栏的视图状态：分类、收藏（id 表）、最近播过（id 队列，新的在前） */
+  cat: localStorage.ssCat || 'all', fav: readLS('ssFav', {}), recent: readLS('ssRecent', []),
 };
 
 /* ---------- 登录 ---------- */
@@ -2033,9 +2046,72 @@ const PLAY_TRI = '<svg viewBox="0 0 12 14" aria-hidden="true"><path d="M1 1.2 11
 /* 这一条现在到底是什么状态——播完了还写「正在播」就是在撒谎。 */
 const playWord = p => p.state === 'playing' ? '正在播' : ended(p) ? '已播完' : '已暂停';
 const matchQ = (n, q) => !q || String(n || '').toLowerCase().includes(q.toLowerCase());
-const localItems = () => S.items.filter(i => matchQ(i.name, S.q));
+/* 素材分类：按名字自动归类。手动打标签的整理没人维护得住，而名字里本来就
+   写着当时的场景（顿击 / 机械 / 椅子 / 人声…），直接拿来用。
+   加一类就在这里加一行 —— 顺序就是横条上的顺序。 */
+const CATS = [
+  ['all',   '全部', null],
+  ['fav',   '常用', null],
+  ['thud',  '顿击', /^\u987f\u51fb/],
+  ['hit',   '敲击', /闷响|金属|木质/],
+  ['mach',  '机械', /电钻|切割|轰鸣|嗡鸣|机器|钻/],
+  ['chair', '椅子', /椅/],
+  ['step',  '脚步', /光脚|赤脚|跑跳|走路|双脚/],
+  ['voice', '人声', /几点了|有病|家教|傻逼|嚎|动静|逼数|不睡|吵醒|楼上|小朋友|啊啊|一家子|没鞋|拖鞋|勤快|活跃/],
+];
+const catOf = n => { const hit = CATS.find(c => c[2] && c[2].test(n || '')); return hit ? hit[0] : 'misc'; };
+const favOn = id => !!(S.fav && S.fav[id]);
+const setFav = (id, on) => {
+  S.fav = S.fav || {};
+  if (on) S.fav[id] = 1; else delete S.fav[id];
+  localStorage.ssFav = JSON.stringify(S.fav);
+};
+const markRecent = id => {
+  S.recent = [id, ...(S.recent || []).filter(x => x !== id)].slice(0, 20);
+  localStorage.ssRecent = JSON.stringify(S.recent);
+};
+/* 「常用」= 收藏 + 最近播过的，收藏在前。谁天天用哪几条，不用自己挑。 */
+const favItems = () => {
+  const out = [], seen = new Set();
+  for (const id of [...Object.keys(S.fav || {}), ...(S.recent || [])]) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const it = S.items.find(x => x.id === id);
+    if (it) out.push(it);
+  }
+  return out;
+};
+const localItems = () => {
+  const base = S.items.filter(i => matchQ(i.name, S.q));
+  if (S.cat === 'fav') return favItems().filter(i => matchQ(i.name, S.q));
+  if (S.cat && S.cat !== 'all') return base.filter(i => catOf(i.name) === S.cat);
+  return base;
+};
+/* 分类条只建一次，之后只切 class：每次都重排 DOM 会把横滑位置甩回去。 */
+function renderCats() {
+  const bar = $('#catBar');
+  if (S.itemTab !== 'local') { bar.classList.add('hide'); return; }
+  bar.classList.remove('hide');
+  if (!bar.childElementCount) {
+    bar.innerHTML = CATS.map(([k, name]) =>
+      `<button class="chip" data-c="${k}" aria-pressed="false"><span class="cname">${name}</span></button>`).join('')
+      + `<button class="chip" data-c="misc" aria-pressed="false"><span class="cname">其他</span></button>`;
+    bar.querySelectorAll('.chip').forEach(b => b.onclick = () => {
+      S.cat = b.dataset.c;
+      localStorage.ssCat = S.cat;
+      $('#itemScroll').scrollTop = 0;
+      renderItems();
+    });
+  }
+  bar.querySelectorAll('.chip').forEach(b => {
+    const on = b.dataset.c === (S.cat || 'all');
+    b.classList.toggle('sel', on);
+    b.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
+}
 
 function renderItems() {
+  renderCats();
   $$('#itemTabs button').forEach(b => b.classList.toggle('on', b.dataset.t === S.itemTab));
   $('#itemTabs button[data-t=local]').textContent = '本机 ' + S.items.length;
   $('#itemTabs button[data-t=shared]').textContent = '共享 ' + S.shared.length;
@@ -2074,7 +2150,13 @@ function renderItems() {
   box.innerHTML = '<div class="list"></div>';
   requestAnimationFrame(syncPin);
   const list = box.firstElementChild;
-  if (!rows.length) { list.innerHTML = `<div class="empty"><div class="h">没有匹配的素材</div></div>`; return; }
+  if (!rows.length) {
+    const h = S.cat === 'fav' ? '常用还是空的' : '这一类没有素材';
+    const tip = S.cat === 'fav' ? '点某条右侧 ⋯ 收藏，或者先播一条' : '';
+    list.innerHTML = `<div class="empty"><div class="h">${h}</div>` +
+      (tip ? `<div style="font-size:13px;color:var(--t2)">${tip}</div>` : '') + `</div>`;
+    return;
+  }
   for (const it of rows) {
     // 🔴 空白方块不会告诉人「点我能播」。每一行都画三角，靠**颜色**分三态：
     // 灰 = 可以点 / 蓝底蓝三角 = 这条是机器上装着的 / 蓝底转圈 = 刚点下还没回话。
@@ -2098,10 +2180,12 @@ function renderItems() {
       const m = document.createElement('div');
       m.className = 'rowmenu';
       const manage = canManage(p), share = canShare(p);
-      m.innerHTML = `<button>改名</button>
+      m.innerHTML = `<button class="acc">${favOn(it.id) ? '取消收藏' : '收藏'}</button>
+        <button>改名</button>
         <button class="acc"${share ? '' : ' disabled'}>${share ? '上传到共享' : '设备需更新'}</button>
         <button class="bad">移除</button>`;
-      const [bRen, bShare, bDel] = m.querySelectorAll('button');
+      const [bFav, bRen, bShare, bDel] = m.querySelectorAll('button');
+      bFav.onclick = () => { setFav(it.id, !favOn(it.id)); renderItems(); };
       bRen.onclick = () => renameItem(it);
       bShare.onclick = () => share && cmd('share', { localPath: it.localPath, name: it.name });
       bDel.onclick = () => {
@@ -2123,6 +2207,7 @@ function renameItem(it) {
 /* 点下去到出声之间有实测 0.9 秒（蓝牙唤醒），所以那一刻就得给反馈——
    等服务端确认再变色，中间那一秒屏幕上什么都没发生。 */
 const play = it => {
+  markRecent(it.id);
   S.selItem = it.id; S.openRow = null;
   renderItems();
   cmd('play', { localPath: it.localPath, name: it.name, itemId: it.id });
