@@ -173,6 +173,24 @@ input{font:inherit;color:inherit}
 @keyframes wakePulse{0%{transform:scale(1);opacity:.55}100%{transform:scale(2.6);opacity:0}}
 @keyframes wakePop{0%{transform:scale(1);opacity:.7}100%{transform:scale(3.2);opacity:0}}
 @media (prefers-reduced-motion:reduce){.wake .wd::after{animation:none!important}}
+/* ---------- 调频率试震感 ----------
+ * 贴着天花板放顿击，找楼板最吃的那个频率。只换频率、音色不变，比出来才公平。
+ * 大读数是这张卡的主角；每敲一下它闪一下强调色（180ms），扫描时盯着它就知道
+ * 「刚才那下是多少赫兹」。 */
+.tonehz{display:flex;align-items:baseline;justify-content:center;gap:6px;padding:6px 0 0}
+.tonehz b{font:700 56px/1 var(--mono);letter-spacing:-.03em;color:var(--t1);display:inline-block;
+          transition:color var(--mo2) var(--ease),transform var(--mo2) var(--ease)}
+.tonehz span{font-size:17px;font-weight:600;color:var(--t2)}
+.tonehz.hit b{color:var(--accent);transform:scale(1.06)}
+.tonerow{display:flex;gap:10px}
+.tonerow .btn{height:52px}
+.tonerow .step{flex:none;width:68px;font-size:18px;font-variant-numeric:tabular-nums}
+.tonerow .main{flex:1}
+.tonerow2{display:flex;gap:10px}
+.tonerow2 .btn{flex:1;height:46px;font-size:15px}
+#toneSweep.on{background:var(--accent);color:#fff;border-color:transparent}
+.toneticks{display:flex;justify-content:space-between;font:11px/1 var(--mono);color:var(--t3);padding:0 6px}
+@media (prefers-reduced-motion:reduce){.tonehz b{transition:none}}
 /* 压缩态那一行要装下后退 / 播放 / 音量 / 这颗：收成一颗只靠颜色说话的圆钮，
    字回到 aria-label 和 tip 里（三态颜色本身已经分得开：灰圈 / 琥珀描边 / 实色绿） */
 #pin.compact .wake{width:34px;padding:0;justify-content:center}
@@ -746,11 +764,38 @@ nav .ni{font-size:16px;line-height:1}
   </div>
 </div>
 
+<!-- 调频率试震感：拖到哪、松手就在那台 Mac 上敲一下。不存文件，满意了才存为素材。 -->
+<div class="mask hide" id="mTone">
+  <div class="sheet">
+    <div class="shead"><span class="ph"></span><span class="ttl">调频率试震感</span>
+      <button class="strong" id="toneClose">完成</button></div>
+    <div class="sbody">
+      <div class="tonehz" id="toneRead"><b id="toneHz">50</b><span>Hz</span></div>
+      <div class="concl mut" id="toneNote" style="text-align:center">—</div>
+      <div class="sl" id="toneWrap"><b id="toneFill" style="width:0"></b>
+        <input id="toneSl" type="range" min="25" max="120" step="1" value="50" aria-label="频率"></div>
+      <div class="toneticks"><span>25</span><span>50</span><span>75</span><span>100</span><span>120</span></div>
+      <div class="tonerow">
+        <button class="btn sec step" id="toneDown" aria-label="低 1 赫兹">−1</button>
+        <button class="btn main" id="toneHit">敲一下</button>
+        <button class="btn sec step" id="toneUp" aria-label="高 1 赫兹">+1</button>
+      </div>
+      <div class="tonerow2">
+        <button class="btn sec" id="toneSweep" title="每 3 秒升 2 赫兹，觉得最震的时候点停">从 34 扫到 62</button>
+        <button class="btn sec" id="toneSeed" title="换一种敲法（衰减、泛音、碰撞声），频率不变">换个音色</button>
+      </div>
+      <button class="btn sec" id="toneSave" style="height:48px;font-size:16px">把 50 Hz 存为素材</button>
+    </div>
+  </div>
+</div>
+
 <div class="mask hide" id="mForge">
   <div class="sheet">
     <div class="shead"><button id="forgeCancel">取消</button><span class="ttl">生成音效</span><span class="ph"></span></div>
     <div class="sbody scroll">
       <div class="seg wide" id="forgeKinds"></div>
+      <button class="btn sec" id="bToneOpen" style="height:42px;font-size:14px"
+        title="贴着天花板放，只换频率、音色不变，挑楼板最吃的那个">按频率试震感（顿击）›</button>
       <div style="font-size:13px;color:var(--t2)" id="forgeBlurb"></div>
       <!-- 🔴 波形不是装饰：掷骰子本身没有声音以外的反馈，看得见形状变了才知道骰子真的动了。 -->
       <canvas id="forgeWave" style="width:100%;height:64px;display:block;
@@ -1083,6 +1128,7 @@ const canFetch = p => p && atLeast(p.appVersion, '0.30.0');
  * 🔴 加了新的版本卡点就往这里补一条，否则设备弹窗会说「一切正常」，
  * 而按钮那边照样是灰的，两处对不上比不说更糟。 */
 const FEATURES = [
+  { min: '0.37.0', name: '调频率试震感' },
   { min: '0.36.0', name: '唤醒音箱' },
   // 🔴 「生成语音」以前在这儿卡 0.32.0。现在合成在浏览器里做，一台 Mac 都不需要，
   // 留着这条会让一台完全够用的机器被标成「落后」。
@@ -1489,7 +1535,7 @@ const CMD_LIMIT = { fetch: 180000, share: 120000, pull: 120000, speak: 120000,
                     * 以内的素材播完再回执，好把「响了 N 次」写进结论里 —— 否则
                     * 回执写在 play() 之后 0 ms，那时没有任何证据，而心跳要十几秒
                     * 后才补上。最长 10+2 秒，留三秒余量给往返。 */
-                   play: 15000, load: 15000 };
+                   play: 15000, load: 15000, tone: 15000 };
 
 async function cmd(action, payload = {}, after = null) {
   if (!current()) return;
@@ -1916,6 +1962,7 @@ function renderNow() {
     : '<span style="color:var(--t3)">没有输出设备信息</span>';
   renderVol(p);
   renderWake(p);
+  if (!$('#mTone').classList.contains('hide')) renderTone();   // 设备上下线 / 升级了要跟着变
   renderFab(free);
   if (S.tab === 'now') renderFreeQueue(free);
 }
@@ -3225,6 +3272,86 @@ function wavBlob(samples, sr) {
 }
 
 const forgeFileName = t => `${t.kind.name} ${Math.round(t.f0)}Hz`;
+
+/* ---------- 调频率试震感 ----------
+   🔴 试敲走 Mac 端的 `tone` 指令：合成在那台 Mac 上做、当场从它的音箱响，
+   不上传不下载 —— 浏览器里合成再传过去要多走两趟，那就不是「敲一下」了。
+   Mac 收到后改写成一条普通 play，所以起声 / 保温 / 回执和点打击垫完全一样。 */
+const TONE = { min: 25, max: 120, sweepFrom: 34, sweepTo: 62, sweepStep: 2, sweepEvery: 3000 };
+const canTone = p => !!p && atLeast(p.appVersion, '0.37.0');
+function toneHz() { return Math.round(+$('#toneSl').value); }
+function setToneHz(hz) {
+  hz = Math.max(TONE.min, Math.min(TONE.max, Math.round(hz)));
+  $('#toneSl').value = hz; localStorage.ssToneHz = hz;
+  renderTone();
+}
+function renderTone() {
+  const p = current(), hz = toneHz(), ok = isLive(p) && canTone(p);
+  $('#toneHz').textContent = hz;
+  const v = (hz - TONE.min) / (TONE.max - TONE.min);
+  $('#toneFill').style.width = `calc(14px + (100% - 28px) * ${v})`;
+  $('#toneFill').style.background = 'var(--accent)';
+  for (const id of ['#toneHit', '#toneDown', '#toneUp', '#toneSweep', '#toneSeed', '#toneSave'])
+    $(id).disabled = !ok;
+  $('#toneHit').textContent = ok ? '敲一下' : !p ? '没有设备' : !isLive(p) ? '设备不在线' : '设备需更新';
+  $('#toneSave').textContent = `把 ${hz} Hz 存为素材`;
+  const sw = S.toneSweep;
+  $('#toneSweep').classList.toggle('on', !!sw);
+  $('#toneSweep').setAttribute('aria-pressed', sw ? 'true' : 'false');
+  $('#toneSweep').textContent = sw ? `停 · 现在 ${hz} Hz` : `从 ${TONE.sweepFrom} 扫到 ${TONE.sweepTo}`;
+  if (!S.toneMsg) $('#toneNote').textContent = !p ? '—'
+    : !canTone(p) ? `${shortName(deviceName(p))} 是 ${p.appVersion || '?'}，要 0.37.0：在那台 Mac 上点「检查更新」`
+    : `在 ${shortName(deviceName(p))} 上响 · 只换频率，音色不变`;
+}
+function toneHit() {
+  const p = current(); if (!isLive(p) || !canTone(p)) return;
+  // 读数闪一下：扫描时盯着它，就知道刚才那一下是多少赫兹
+  const r = $('#toneRead'); r.classList.remove('hit'); void r.offsetWidth; r.classList.add('hit');
+  clearTimeout(S.toneFlash); S.toneFlash = setTimeout(() => r.classList.remove('hit'), 180);
+  cmd('tone', { hz: toneHz(), seed: +localStorage.ssToneSeed || 7 });
+}
+function stopSweep() { clearInterval(S.toneSweep); S.toneSweep = null; renderTone(); }
+function openTone() {
+  setToneHz(+localStorage.ssToneHz || 50);
+  S.toneMsg = '';
+  $('#mForge').classList.add('hide');
+  $('#mTone').classList.remove('hide');
+  // 进来就把音箱叫醒：试频率要的是每一下都完整，第一下被吞就白比了
+  const p = current();
+  if (isLive(p) && canWake(p) && !p.warm) { S.wakeReq = { on: true, at: Date.now() }; cmd('wake'); }
+}
+$('#bToneOpen').onclick = openTone;
+$('#toneClose').onclick = () => { stopSweep(); $('#mTone').classList.add('hide'); };
+$('#mTone').onclick = e => { if (e.target.id === 'mTone') $('#toneClose').onclick(); };
+$('#toneSl').oninput = () => { stopSweep(); setToneHz(toneHz()); };
+$('#toneSl').onchange = () => toneHit();                 // 拖到哪，松手就在哪敲一下
+$('#toneDown').onclick = () => { stopSweep(); setToneHz(toneHz() - 1); toneHit(); };
+$('#toneUp').onclick = () => { stopSweep(); setToneHz(toneHz() + 1); toneHit(); };
+$('#toneHit').onclick = () => { stopSweep(); toneHit(); };
+$('#toneSeed').onclick = () => {
+  localStorage.ssToneSeed = 1 + Math.floor(Math.random() * 999983);
+  toneHit();
+};
+$('#toneSweep').onclick = () => {
+  if (S.toneSweep) return stopSweep();
+  setToneHz(TONE.sweepFrom); toneHit();
+  S.toneSweep = setInterval(() => {
+    const next = toneHz() + TONE.sweepStep;
+    if (next > TONE.sweepTo) return stopSweep();
+    setToneHz(next); toneHit();
+  }, TONE.sweepEvery);
+  renderTone();
+};
+$('#toneSave').onclick = () => {
+  stopSweep();
+  const hz = toneHz();
+  cmd('tone', { hz, seed: +localStorage.ssToneSeed || 7, save: true }, rec => {
+    S.toneMsg = rec.result || `已存为素材「顿击 ${hz}Hz」`;
+    $('#toneNote').textContent = S.toneMsg;
+    clearTimeout(S.toneMsgTimer);
+    S.toneMsgTimer = setTimeout(() => { S.toneMsg = ''; renderTone(); }, 5000);
+  });
+};
 
 function openForge() {
   $('#forgeErr').classList.add('hide');
