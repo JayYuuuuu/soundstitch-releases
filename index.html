@@ -1467,6 +1467,7 @@ async function cmd(action, payload = {}, after = null) {
     const rec = await api('/api/collections/ss_commands/records', { method: 'POST',
       body: JSON.stringify({ player: S.sel, action, payload, status: 'pending' }) });
     watch(rec.id, CMD_LIMIT[action] || 8000, after);
+    if (action === 'play' && payload.itemId && S.watch) S.watch.playing = payload.itemId;
   } catch (e) { fail(String(e.message || e)); }
 }
 
@@ -1832,7 +1833,12 @@ function renderNow() {
   renderPadProgress();
 
   // 出声证据（A10 四态）。指令回执优先——它是刚刚按下那一下的结论。
-  if (S.cmd !== 'idle') {
+  // 🔴 例外：点的是「放某一条」，而机器已经报上来「正在放这一条」—— 那就不再转圈。
+  // 短素材的回执要等放完才来（那是「响了 N 次」的证据），这期间声音早就出来了，
+  // 还写「下发中」/「未回应」就是在说假话。回执照样在等，到了照样亮绿徽标。
+  const started = S.watch && S.watch.playing && p.currentItem === S.watch.playing &&
+                  p.state === 'playing' && (S.cmd === 'pending' || S.cmd === 'slow');
+  if (S.cmd !== 'idle' && !started) {
     const map = { pending: ['下发中', 'mut', 1], slow: ['未回应', 'warn', 1],
                   fail: [S.failMsg || '失败', 'bad', 0], done: [S.doneMsg, 'ok', 0] };
     const [t, k, sp] = map[S.cmd] || ['', 'mut', 0];
