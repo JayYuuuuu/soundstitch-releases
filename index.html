@@ -182,6 +182,13 @@ input{font:inherit;color:inherit}
           transition:color var(--mo2) var(--ease),transform var(--mo2) var(--ease)}
 .tonehz span{font-size:17px;font-weight:600;color:var(--t2)}
 .tonehz.hit b{color:var(--accent);transform:scale(1.06)}
+/* 声音从哪出来：试震感只有从贴着天花板的那只音箱出声才有意义，所以说设备名不说机器名。
+   不是蓝牙音箱时整条变橙描边——这时候敲多少下都是在测笔记本自己的喇叭。 */
+.toneout{display:flex;align-items:center;justify-content:center;gap:6px;width:100%;min-height:40px;
+  padding:6px 12px;border-radius:12px;background:var(--card2);color:var(--t1);font-size:14px;border:2px solid transparent}
+.toneout b{font-weight:600}
+.toneout .tsw{color:var(--accent);font-weight:600;flex:none;white-space:nowrap}
+.toneout.warn{border-color:var(--warn);color:var(--warnText);background:color-mix(in srgb,var(--warn) 12%,transparent)}
 .tonerow{display:flex;gap:10px}
 .tonerow .btn{height:52px}
 .tonerow .step{flex:none;width:68px;font-size:18px;font-variant-numeric:tabular-nums}
@@ -777,6 +784,7 @@ nav .ni{font-size:16px;line-height:1}
         <button type="button" data-s="pure" title="只有一个低频，没有泛音和碰撞声：同样的震感，耳朵听到的少得多">纯低频</button>
       </div>
       <div class="tonehz" id="toneRead"><b id="toneHz">50</b><span>Hz</span></div>
+      <button type="button" class="toneout" id="toneOut">—</button>
       <div class="concl mut" id="toneNote" style="text-align:center">—</div>
       <div class="sl" id="toneWrap"><b id="toneFill" style="width:0"></b>
         <input id="toneSl" type="range" min="20" max="120" step="1" value="50" aria-label="频率"></div>
@@ -3318,9 +3326,21 @@ function renderTone() {
   $('#toneSweep').textContent = sw ? `停 · 现在 ${hz} Hz` : `从 ${from} 扫到 ${to}`;
   if (!S.toneMsg) $('#toneNote').textContent = !p ? '—'
     : !canTone(p) ? `${shortName(deviceName(p))} 是 ${p.appVersion || '?'}，要 ${pure ? '0.38.0' : '0.37.0'}：在那台 Mac 上点「检查更新」`
-    : pure ? `在 ${shortName(deviceName(p))} 上响 · 只有低频，没有泛音和碰撞声`
-    : `在 ${shortName(deviceName(p))} 上响 · 只换频率，音色不变`;
+    : pure ? '只有低频，没有泛音和碰撞声' : '只换频率，音色不变';
+  // 🔴 声音从那台 Mac 的**当前输出**出来。用户要的是「贴着天花板的音箱在响」，
+  // 机器名回答不了这个；输出切到了笔记本自己的喇叭，比出来的频率全是白测。
+  const o = $('#toneOut'), out = p && p.outputDevice;
+  o.disabled = !p || !p.audioDevices;
+  o.classList.toggle('warn', !!out && !out.bluetooth);
+  o.innerHTML = !out ? '<span>不知道从哪个设备出声</span>'
+    : out.bluetooth ? `<span class="ell">从蓝牙音箱 <b>${esc(out.name)}</b> 出声</span><span class="tsw">切换</span>`
+    : `<span class="ell">不是音箱：从 <b>${esc(out.name)}</b> 出声</span><span class="tsw">换到音箱</span>`;
 }
+$('#toneOut').onclick = () => {
+  const p = current(); if (!p || !p.audioDevices) return;
+  $('#mOut').style.zIndex = 21;            // 叠在试震感面板上面，选完回到面板
+  openOut(p);
+};
 function toneHit() {
   const p = current(); if (!isLive(p) || !canTone(p)) return;
   // 读数闪一下：扫描时盯着它，就知道刚才那一下是多少赫兹
