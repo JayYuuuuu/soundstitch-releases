@@ -22,6 +22,8 @@
   --barbg:rgba(242,242,247,.94); --pinbg:rgba(255,255,255,.86);
   --shadow:0 1px 3px rgba(0,0,0,.07);
   --mono:ui-monospace,'SF Mono',Menlo,monospace;
+  /* 动效令牌（总规范「交互动画」五档）：微 120 / 快 180 / 标准 280，起步快收尾稳 */
+  --mo1:120ms; --mo2:180ms; --mo3:280ms; --ease:cubic-bezier(.2,0,0,1);
 }
 @media (prefers-color-scheme:dark){
   :root{
@@ -272,6 +274,42 @@ main{flex:1;min-height:0;display:flex;flex-direction:column}
                 border:.5px solid var(--line2);font-size:14px;font-weight:600;flex:none}
 .rowmenu>button.acc{color:var(--accent)}
 .rowmenu>button.bad{color:var(--bad);border-color:rgba(255,59,48,.35)}
+/* ---------- 打击垫（本机素材）----------
+ * 控制端是拿来「当场放」的：点哪块就立刻切到哪块，像 DJ 切音效。所以本机素材
+ * 不再是一行一条的清单，而是一格一块的垫子 —— 390 的屏幕一屏能看到十几块，
+ * 不用滚就能连着点。左边那条色带是分类（顿击 / 敲击 / 机械…），扫一眼就分得开。
+ * 状态三档，都是实色强调，不靠浅灰：
+ *   正在响 = 整块实色强调底 + 白字 + 底部进度条
+ *   装着但没在响（播完 / 暂停）= 浅强调底 + 2px 强调描边
+ *   刚点下、机器还没回话 = 2px 强调描边 + 角上转圈 */
+.pads{display:grid;grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:8px}
+.pd{position:relative;height:72px;border-radius:14px;background:var(--card);
+    border:.5px solid var(--line2);padding:9px 10px 8px 13px;display:flex;flex-direction:column;
+    justify-content:space-between;text-align:left;overflow:hidden;color:var(--t1);
+    user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;
+    transition:transform var(--mo1) var(--ease),background-color var(--mo1) var(--ease)}
+.pd::before{content:'';position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--cc,var(--t3))}
+.pd:active{transform:scale(.96)}
+.pd .nm{font-size:13.5px;font-weight:500;line-height:1.25;padding-right:16px;
+        display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-all}
+.pd .meta{display:flex;align-items:center;gap:5px;font:11px/1 var(--mono);color:var(--t2);min-width:0}
+.pd .meta .fav{color:var(--warn);font-family:inherit}
+.pd .more{position:absolute;right:0;top:0;width:32px;height:30px;font-size:14px;color:var(--t3);
+          display:flex;align-items:flex-start;justify-content:flex-end;padding:6px 8px 0 0}
+.pd .spin{position:absolute;right:8px;bottom:8px;width:13px;height:13px}
+.pd .pfill{position:absolute;left:0;bottom:0;height:3px;width:0;background:rgba(255,255,255,.92)}
+.pd.live{background:var(--accent);border-color:transparent;color:#fff}
+.pd.live::before{background:rgba(255,255,255,.5)}
+.pd.live .meta,.pd.live .more{color:rgba(255,255,255,.88)}
+.pd.live .meta .fav{color:#FFE08A}
+.pd.held{background:color-mix(in srgb,var(--accent) 14%,var(--card));
+         box-shadow:inset 0 0 0 2px var(--accent);border-color:transparent}
+.pd.held .meta{color:var(--accText)}
+.pd.wait{box-shadow:inset 0 0 0 2px var(--accent);border-color:transparent}
+.pd.flash{box-shadow:inset 0 0 0 2px var(--bad)}
+.pd[data-c=thud]{--cc:#5856D6}.pd[data-c=hit]{--cc:#FF9F0A}.pd[data-c=mach]{--cc:#A2845E}
+.pd[data-c=chair]{--cc:#30B0C7}.pd[data-c=step]{--cc:#34C759}.pd[data-c=voice]{--cc:#FF2D55}
+@media (prefers-reduced-motion:reduce){.pd:active{transform:none}}
 /* 素材分类条：一行横滑。选中态直接复用 .chip.sel 的实色强调底，不另写一套皮肤。 */
 .catbar{display:flex;gap:8px;overflow:auto hidden;touch-action:pan-x;flex:none;
         padding:8px 14px 2px;scrollbar-width:none}
@@ -568,6 +606,24 @@ nav .ni{font-size:16px;line-height:1}
       <input id="lgPass" class="linput" type="password" placeholder="密码" autocomplete="current-password">
       <div id="lgErr" class="concl bad hide"></div>
       <button class="btn" id="bLogin">登录</button>
+    </div>
+  </div>
+</div>
+
+<!-- 一块垫子的管理：长按 / 右键 / 角上 ⋯。放在弹层里而不是行内下推：
+     网格里往下推一行会把旁边几块一起挤走。 -->
+<div class="mask hide" id="mItem">
+  <div class="sheet">
+    <div class="shead"><span></span><span class="ttl ell" id="itemMenuName" style="max-width:70%">—</span>
+      <button class="strong" id="itemMenuClose">完成</button></div>
+    <div class="sbody">
+      <div id="itemMenuMeta" class="mono" style="font-size:12px;color:var(--t2);text-align:center">—</div>
+      <div id="itemMenuBtns" style="display:flex;flex-direction:column;gap:9px">
+        <button class="btn sec" style="height:48px;font-size:16px">收藏</button>
+        <button class="btn sec" style="height:48px;font-size:16px">改名</button>
+        <button class="btn sec" style="height:48px;font-size:16px">上传到共享</button>
+        <button class="btn danger" style="height:48px;font-size:16px">从控制端移除</button>
+      </div>
     </div>
   </div>
 </div>
@@ -1606,7 +1662,12 @@ async function loadPlayers() {
   const r = await api('/api/collections/ss_players/records?perPage=50&sort=created');
   S.players = r.items || [];
   sortPlayers();
-  if (!S.players.find(p => p.id === S.sel)) S.sel = (S.players[0] || {}).id || null;
+  if (!S.players.find(p => p.id === S.sel)) {
+    // 上次选的那台 > 第一台在线的 > 第一台。按名字排，离线几个月的老机器常排在
+    // 最前面 —— 一打开就选中一台连不上的，点什么都放不出来。
+    const last = S.players.find(p => p.id === localStorage.ssSel);
+    S.sel = (last || S.players.find(isLive) || S.players[0] || {}).id || null;
+  }
   notePos(current());
   renderChips(); renderNow();
   if (S.sel) { loadItems(); loadScheds(); }
@@ -1661,7 +1722,7 @@ const acctName = () => {
 function select(id) {
   if (S.sel === id) return;
   $('#itemScroll').scrollTop = 0; setPin(false);
-  S.sel = id; S.items = []; S.scheds = []; S.runs = []; S.selItem = null;
+  S.sel = id; localStorage.ssSel = id; S.items = []; S.scheds = []; S.runs = []; S.selItem = null;
   S.openRow = null; S.pos = null;
   renderChips(); renderNow(); renderItems(); renderRules(); renderLog();
   loadItems(); loadScheds();
@@ -1768,6 +1829,7 @@ function renderNow() {
   // 拖动中这行由 `#seek` 的 oninput 写（跟着手指走），别每秒覆盖回去。
   if (!S.seekHeld) sub.textContent = timeRead(at, d);
   renderSeek(p, at, d);
+  renderPadProgress();
 
   // 出声证据（A10 四态）。指令回执优先——它是刚刚按下那一下的结论。
   if (S.cmd !== 'idle') {
@@ -2093,17 +2155,27 @@ function renderCats() {
   if (S.itemTab !== 'local') { bar.classList.add('hide'); return; }
   bar.classList.remove('hide');
   if (!bar.childElementCount) {
-    bar.innerHTML = CATS.map(([k, name]) =>
+    bar.innerHTML = `<button class="chip" id="catSearch" aria-label="找素材" title="找素材"><span class="cname">⌕</span></button>` +
+      CATS.map(([k, name]) =>
       `<button class="chip" data-c="${k}" aria-pressed="false"><span class="cname">${name}</span></button>`).join('')
       + `<button class="chip" data-c="misc" aria-pressed="false"><span class="cname">其他</span></button>`;
-    bar.querySelectorAll('.chip').forEach(b => b.onclick = () => {
+    $('#catSearch').onclick = () => {
+      S.searchOpen = !(S.searchOpen || S.q);
+      if (!S.searchOpen) { S.q = ''; $('#q').value = ''; }
+      renderItems();
+      if (S.searchOpen) $('#q').focus();
+    };
+    bar.querySelectorAll('.chip[data-c]').forEach(b => b.onclick = () => {
       S.cat = b.dataset.c;
       localStorage.ssCat = S.cat;
       $('#itemScroll').scrollTop = 0;
       renderItems();
     });
   }
-  bar.querySelectorAll('.chip').forEach(b => {
+  const sOn = !!(S.searchOpen || S.q);
+  $('#catSearch').classList.toggle('sel', sOn);
+  $('#catSearch').setAttribute('aria-pressed', sOn ? 'true' : 'false');
+  bar.querySelectorAll('.chip[data-c]').forEach(b => {
     const on = b.dataset.c === (S.cat || 'all');
     b.classList.toggle('sel', on);
     b.setAttribute('aria-pressed', on ? 'true' : 'false');
@@ -2116,7 +2188,11 @@ function renderItems() {
   $('#itemTabs button[data-t=local]').textContent = '本机 ' + S.items.length;
   $('#itemTabs button[data-t=shared]').textContent = '共享 ' + S.shared.length;
   const many = (S.itemTab === 'local' ? S.items : S.shared).length > 12;
-  $('#searchWrap').classList.toggle('hide', !many);
+  // 本机栏的搜索收进分类条最前面那颗放大镜：打击垫要的是一屏多放几块，
+  // 常驻一整行输入框换不来什么 —— 分类已经能把五十来条切到一屏以内。
+  const folded = S.itemTab === 'local' && !S.searchOpen && !S.q;
+  $('#searchWrap').classList.toggle('hide', !many || folded);
+  $('#catSearch') && $('#catSearch').classList.toggle('hide', !many);
   $('#auditNote').classList.toggle('hide', S.itemTab !== 'shared');
   $('#bAdd').textContent = S.itemTab === 'local' ? '下载' : '上传本机';
   $('#bAdd').title = S.itemTab === 'local'
@@ -2147,58 +2223,102 @@ function renderItems() {
     return;
   }
   const rows = localItems();
-  box.innerHTML = '<div class="list"></div>';
   requestAnimationFrame(syncPin);
-  const list = box.firstElementChild;
   if (!rows.length) {
     const h = S.cat === 'fav' ? '常用还是空的' : '这一类没有素材';
-    const tip = S.cat === 'fav' ? '点某条右侧 ⋯ 收藏，或者先播一条' : '';
-    list.innerHTML = `<div class="empty"><div class="h">${h}</div>` +
-      (tip ? `<div style="font-size:13px;color:var(--t2)">${tip}</div>` : '') + `</div>`;
+    const tip = S.cat === 'fav' ? '长按某块收藏，或者先放一条' : '';
+    box.innerHTML = `<div class="list"><div class="empty"><div class="h">${h}</div>` +
+      (tip ? `<div style="font-size:13px;color:var(--t2)">${tip}</div>` : '') + `</div></div>`;
     return;
   }
+  // 🔴 点哪块就放哪块：不管机器上正在响什么，点下去就是切过去。点正在响的那块
+  // = 从头再来一遍（DJ 打击垫就是这个语义）。管理（收藏 / 改名 / 移除）退到
+  // 长按和角上的 ⋯ —— 它们一天用不了一次，不该和「放」抢同一个手势。
+  const grid = document.createElement('div');
+  grid.className = 'pads';
   for (const it of rows) {
-    // 🔴 空白方块不会告诉人「点我能播」。每一行都画三角，靠**颜色**分三态：
-    // 灰 = 可以点 / 蓝底蓝三角 = 这条是机器上装着的 / 蓝底转圈 = 刚点下还没回话。
     const on = p && p.currentItem === it.id;
     const wait = !on && S.selItem === it.id;      // 点了，机器还没确认
-    const row = document.createElement('div');
-    row.className = 'row' + (on || wait ? ' on' : '');
-    row.innerHTML = `<div class="ico${on ? ' live' : wait ? ' wait' : ''}">${
-        wait ? '<i class="spinner"></i>' : PLAY_TRI}</div>
-      <div class="mid"><div class="nm ell">${esc(it.name)}</div>
-        <div class="sub ell">${dur(it.duration)} · ${size(it.fileSize)}${
-          on ? ' · ' + playWord(p) : wait ? ' · 下发中' : ''}</div></div>
-      <button class="dots">⋯</button>`;
-    row.querySelector('.mid').onclick = () => play(it);
-    row.querySelector('.ico').onclick = () => play(it);
-    row.querySelector('.dots').onclick = e => { e.stopPropagation();
-      S.openRow = S.openRow === it.id ? null : it.id; renderItems(); };
-    list.appendChild(row);
-    // 行内下推，不是弹层：手机上弹层会把上下文一起挡住（A2）
-    if (S.openRow === it.id) {
-      const m = document.createElement('div');
-      m.className = 'rowmenu';
-      const manage = canManage(p), share = canShare(p);
-      m.innerHTML = `<button class="acc">${favOn(it.id) ? '取消收藏' : '收藏'}</button>
-        <button>改名</button>
-        <button class="acc"${share ? '' : ' disabled'}>${share ? '上传到共享' : '设备需更新'}</button>
-        <button class="bad">移除</button>`;
-      const [bFav, bRen, bShare, bDel] = m.querySelectorAll('button');
-      bFav.onclick = () => { setFav(it.id, !favOn(it.id)); renderItems(); };
-      bRen.onclick = () => renameItem(it);
-      bShare.onclick = () => share && cmd('share', { localPath: it.localPath, name: it.name });
-      bDel.onclick = () => {
-        if (bDel.dataset.armed) return cmd('forget', { itemId: it.id, localPath: it.localPath });
-        bDel.dataset.armed = '1'; bDel.textContent = '确认移除（不删 Mac 上的文件）';
-        setTimeout(() => { if (bDel.dataset.armed) { delete bDel.dataset.armed; bDel.textContent = '移除'; } }, 10000);
-      };
-      if (!manage) m.querySelectorAll('button').forEach(b => {
-        b.disabled = true; if (b !== bShare) b.textContent = '设备需更新'; });
-      list.appendChild(m);
-    }
+    const live = on && p.state === 'playing';
+    const b = document.createElement('button');
+    b.className = 'pd' + (live ? ' live' : on ? ' held' : wait ? ' wait' : '');
+    b.dataset.c = catOf(it.name);
+    b.dataset.id = it.id;
+    b.title = it.name;
+    b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    b.innerHTML = `<div class="nm">${esc(it.name)}</div>
+      <div class="meta">${favOn(it.id) ? '<span class="fav">★</span>' : ''}<span class="ell">${
+        on ? playWord(p) : wait ? '下发中' : dur(it.duration)}</span></div>
+      <span class="more" aria-label="更多">⋯</span>${
+        wait ? '<i class="spinner spin"></i>' : ''}${live ? '<i class="pfill"></i>' : ''}`;
+    grid.appendChild(b);
   }
+  box.innerHTML = '';
+  box.appendChild(grid);
+  bindPads(grid);
+  renderPadProgress();
 }
+
+/* 长按 / 右键 / 点角上的 ⋯ → 管理；其余一切点击 → 立刻放。
+   🔴 用 click 不用 pointerdown 起播：手指在网格上滑动（滚动）也会先按下，
+   按下就放的话每次滚动都会误触一块。click 只在「没滑动的点按」上触发。 */
+function bindPads(grid) {
+  let timer = null, fired = false, x0 = 0, y0 = 0;
+  const padOf = e => e.target.closest('.pd');
+  const itemOf = el => el && S.items.find(i => i.id === el.dataset.id);
+  grid.onpointerdown = e => {
+    const el = padOf(e); if (!el) return;
+    fired = false; x0 = e.clientX; y0 = e.clientY;
+    clearTimeout(timer);
+    timer = setTimeout(() => { fired = true; openItemMenu(itemOf(el)); }, 480);
+  };
+  grid.onpointermove = e => {
+    if (timer && Math.hypot(e.clientX - x0, e.clientY - y0) > 8) { clearTimeout(timer); timer = null; }
+  };
+  grid.onpointerup = grid.onpointercancel = () => { clearTimeout(timer); timer = null; };
+  grid.oncontextmenu = e => { const el = padOf(e); if (!el) return;
+    e.preventDefault(); clearTimeout(timer); fired = true; openItemMenu(itemOf(el)); };
+  grid.onclick = e => {
+    const el = padOf(e); if (!el) return;
+    if (fired) { fired = false; return; }          // 长按已经开了菜单，这一下不算放
+    const it = itemOf(el); if (!it) return;
+    if (e.target.closest('.more')) return openItemMenu(it);
+    play(it);
+  };
+}
+
+/* 正在响的那块底部那条进度。每秒跟着 renderNow 走，只改一个宽度，不重画网格
+   （重画正在被按的按钮是点击丢失的经典来源）。 */
+function renderPadProgress() {
+  const f = $('#itemList .pd.live .pfill'), p = current();
+  if (!f || !p) return;
+  const d = p.duration || 0;
+  f.style.width = d > 0 ? Math.min(100, shownPosition(p, d) / d * 100) + '%' : '0';
+}
+
+function openItemMenu(it) {
+  if (!it) return;
+  const p = current(), manage = canManage(p), share = canShare(p);
+  $('#itemMenuName').textContent = it.name;
+  $('#itemMenuMeta').textContent = `${dur(it.duration)} · ${size(it.fileSize)}`;
+  const [bFav, bRen, bShare, bDel] = $$('#itemMenuBtns button');
+  bFav.textContent = favOn(it.id) ? '取消收藏' : '收藏';
+  bFav.onclick = () => { setFav(it.id, !favOn(it.id)); closeItemMenu(); renderItems(); };
+  bRen.disabled = !manage; bRen.textContent = manage ? '改名' : '改名（设备需更新）';
+  bRen.onclick = () => { closeItemMenu(); renameItem(it); };
+  bShare.disabled = !share; bShare.textContent = share ? '上传到共享' : '上传到共享（设备需更新）';
+  bShare.onclick = () => { closeItemMenu(); cmd('share', { localPath: it.localPath, name: it.name }); };
+  delete bDel.dataset.armed;
+  bDel.disabled = !manage; bDel.textContent = manage ? '从控制端移除' : '移除（设备需更新）';
+  bDel.onclick = () => {
+    if (bDel.dataset.armed) { closeItemMenu(); return cmd('forget', { itemId: it.id, localPath: it.localPath }); }
+    bDel.dataset.armed = '1'; bDel.textContent = '确认移除（不删 Mac 上的文件）';
+  };
+  $('#mItem').classList.remove('hide');
+}
+function closeItemMenu() { $('#mItem').classList.add('hide'); }
+$('#itemMenuClose').onclick = closeItemMenu;
+$('#mItem').onclick = e => { if (e.target.id === 'mItem') closeItemMenu(); };
 function renameItem(it) {
   const name = prompt('新名字', it.name);
   if (name && name.trim() && name !== it.name)
