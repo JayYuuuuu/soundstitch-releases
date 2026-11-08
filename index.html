@@ -15,6 +15,7 @@
 :root{
   --accent:#0A6CFF; --ok:#34C759; --warn:#FF9F0A; --bad:#FF3B30; --once:#AF52DE;
   --okText:#248A3D; --warnText:#8F5700; --badText:#B3000C; --accText:#0A4FA3;
+  --okSolid:#1E7B34;        /* 实色绿底上放白字（对比 ≥4.5），明暗共用 */
   --bg:#F2F2F7; --card:#FFF; --card2:#EDEDF2;
   --t1:#1D1D1F; --t2:#6E6E73; --t3:#8A8A8E;
   --line:rgba(60,60,67,.14); --line2:rgba(60,60,67,.2); --fill:rgba(118,118,128,.12);
@@ -145,6 +146,37 @@ input{font:inherit;color:inherit}
 #pinmeta b{color:var(--t1);font-family:var(--mono)}
 .volrow{display:flex;align-items:center;gap:12px;padding:0 2px}
 .volrow .sl{flex:1;min-width:0}
+/* ---------- 唤醒音箱 ----------
+ * 蓝牙音箱睡着时会吞掉开头那半秒（语音第一个字、整声敲击）。先点一下把它叫醒，
+ * 灯绿了再放。三态都要一眼分得开：
+ *   没醒 = 中性底 + 空心灰点
+ *   正在唤醒 = 琥珀描边 + 点在呼吸（这一两秒是在等音箱，不是卡住）
+ *   已就绪 = 实色绿底白字（选中态规范：不靠浅色切换），亮起那一下点上荡一圈 */
+.wake{flex:none;height:34px;padding:0 12px 0 11px;border-radius:17px;display:inline-flex;
+      align-items:center;gap:8px;background:var(--fill);color:var(--t1);font-size:13px;font-weight:600;
+      white-space:nowrap;box-shadow:inset 0 0 0 0 transparent;
+      transition:background-color var(--mo3) var(--ease),color var(--mo3) var(--ease),
+                 box-shadow var(--mo3) var(--ease),transform var(--mo1) var(--ease)}
+.wake:active:not([disabled]){transform:scale(.95)}
+.wake .wd{position:relative;width:9px;height:9px;border-radius:50%;flex:none;
+          box-shadow:inset 0 0 0 1.5px var(--t3);
+          transition:background-color var(--mo3) var(--ease),box-shadow var(--mo3) var(--ease)}
+.wake .wd::after{content:'';position:absolute;inset:0;border-radius:50%;opacity:0}
+.wake.waking{background:color-mix(in srgb,var(--warn) 14%,transparent);color:var(--warnText);
+             box-shadow:inset 0 0 0 1.5px var(--warn)}
+.wake.waking .wd{background:var(--warn);box-shadow:none}
+.wake.waking .wd::after{background:var(--warn);animation:wakePulse 1.2s var(--ease) infinite}
+.wake.ready{background:var(--okSolid);color:#fff}
+.wake.ready .wd{background:#fff;box-shadow:0 0 0 3px rgba(255,255,255,.28)}
+.wake.ready.pop .wd::after{background:#fff;animation:wakePop .6s var(--ease) 1}
+.wake[disabled]{color:var(--t3);background:var(--fill)}
+@keyframes wakePulse{0%{transform:scale(1);opacity:.55}100%{transform:scale(2.6);opacity:0}}
+@keyframes wakePop{0%{transform:scale(1);opacity:.7}100%{transform:scale(3.2);opacity:0}}
+@media (prefers-reduced-motion:reduce){.wake .wd::after{animation:none!important}}
+/* 压缩态那一行要装下后退 / 播放 / 音量 / 这颗：收成一颗只靠颜色说话的圆钮，
+   字回到 aria-label 和 tip 里（三态颜色本身已经分得开：灰圈 / 琥珀描边 / 实色绿） */
+#pin.compact .wake{width:34px;padding:0;justify-content:center}
+#pin.compact #wakeTxt{display:none}
 
 /* 压缩态：84px 常驻条 */
 #pin.compact .pincard{margin:6px 14px 0;padding:6px 12px 8px!important;gap:6px;border-radius:14px;
@@ -523,6 +555,7 @@ nav .ni{font-size:16px;line-height:1}
               <span class="slnote hide" id="volNote"></span>
             </div>
             <span id="volKind" class="badge mut">音量</span>
+            <button class="wake" id="bWake" aria-pressed="false"><i class="wd"></i><span id="wakeTxt">唤醒音箱</span></button>
           </div>
         </div>
       </div>
@@ -1050,6 +1083,7 @@ const canFetch = p => p && atLeast(p.appVersion, '0.30.0');
  * 🔴 加了新的版本卡点就往这里补一条，否则设备弹窗会说「一切正常」，
  * 而按钮那边照样是灰的，两处对不上比不说更糟。 */
 const FEATURES = [
+  { min: '0.36.0', name: '唤醒音箱' },
   // 🔴 「生成语音」以前在这儿卡 0.32.0。现在合成在浏览器里做，一台 Mac 都不需要，
   // 留着这条会让一台完全够用的机器被标成「落后」。
   { min: '0.30.0', name: '下载音频' },
@@ -1881,6 +1915,7 @@ function renderNow() {
        <span style="color:var(--accent)">切换</span>`
     : '<span style="color:var(--t3)">没有输出设备信息</span>';
   renderVol(p);
+  renderWake(p);
   renderFab(free);
   if (S.tab === 'now') renderFreeQueue(free);
 }
@@ -1904,6 +1939,48 @@ function ago(s) {
   const h = s / 3600;
   return (h < 10 ? h.toFixed(1) : Math.round(h)) + ' 小时前';
 }
+
+/* 唤醒音箱：点一下 → Mac 往音箱送一段听不见的底噪，30 分钟内音箱都醒着；
+   放过任何一条也会自动保温 5 分钟。灯只信服务端报上来的 `warm`，
+   但点下那一刻先乐观地变过去（S.wakeReq），不等往返 —— 和打击垫同一条「跟手」。 */
+const canWake = p => !!p && atLeast(p.appVersion, '0.36.0');
+function wakePhase(p) {
+  const real = (p && p.warm) || '';
+  const r = S.wakeReq;
+  if (r && Date.now() - r.at > 10000) S.wakeReq = null;          // 指令丢了也别永远假装
+  else if (r && ((r.on && real) || (!r.on && !real))) S.wakeReq = null;
+  if (S.wakeReq) return S.wakeReq.on ? 'waking' : '';
+  return real;
+}
+function renderWake(p) {
+  const b = $('#bWake'), txt = $('#wakeTxt');
+  const live = isLive(p), ok = canWake(p);
+  const ph = live && ok ? wakePhase(p) : '';
+  const was = b.dataset.ph || '';
+  b.disabled = !live || !ok;
+  // 亮起那一下荡一圈。记住到什么时候为止 —— 每秒的重绘不能把这 0.6 秒的动画掐断。
+  if (ph === 'ready' && was === 'waking') S.wakePopUntil = Date.now() + 650;
+  b.className = 'wake' + (ph === 'ready' ? ' ready' : ph === 'waking' ? ' waking' : '') +
+                (ph === 'ready' && Date.now() < (S.wakePopUntil || 0) ? ' pop' : '');
+  b.dataset.ph = ph;
+  b.setAttribute('aria-pressed', ph ? 'true' : 'false');
+  txt.textContent = !ok && p ? '唤醒需更新' : ph === 'ready' ? '音箱就绪' : ph === 'waking' ? '正在唤醒' : '唤醒音箱';
+  b.setAttribute('aria-label', txt.textContent);
+  const until = p && p.warmUntil > 0 ? new Date(p.warmUntil * 1000) : null;
+  const hm = until ? until.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false }) : '';
+  b.title = !p ? '' : !ok ? `这台 Mac 是 ${p.appVersion || '?'}，唤醒音箱要 0.36.0：在那台 Mac 上点「检查更新」`
+    : !live ? '设备不在线'
+    : ph === 'ready' ? `音箱醒着，放什么都不会吞掉开头${hm ? ` · 保持到 ${hm}` : ''} · 再点一下关掉`
+    : ph === 'waking' ? '正在往音箱送一段听不见的底噪，一两秒后就绪'
+    : '蓝牙音箱睡着时会吞掉开头半秒。放之前先点一下，绿了再放（放过之后也会自动保温 5 分钟）';
+}
+$('#bWake').onclick = () => {
+  const p = current(); if (!p || !isLive(p) || !canWake(p)) return;
+  const on = !wakePhase(p);
+  S.wakeReq = { on, at: Date.now() };
+  renderWake(p);
+  cmd(on ? 'wake' : 'rest');            // 失败时 fail() 会清掉乐观态
+};
 
 /* 音量：拖动时数字实时跟手但**不下发**，松手 250ms 后才发一次——
    抖一下发十几条指令，蓝牙那头会当场卡住。 */
@@ -2093,7 +2170,7 @@ $('#bBack').onclick = () => {
 function fail(msg) {
   clearTimeout(S.cmdTimer);
   // 没成的那一下别让行一直转圈——转圈的意思是「还在路上」，而它已经不在了
-  S.selItem = null; S.itemSig = null;
+  S.selItem = null; S.itemSig = null; S.wakeReq = null;
   S.cmd = 'fail'; S.failMsg = msg; renderNow();
   S.failTimer = setTimeout(() => { S.cmd = 'idle'; renderNow(); }, 3000);
 }
