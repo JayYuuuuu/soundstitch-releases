@@ -3212,6 +3212,12 @@ const FORGE_KINDS = [
     ratios: [[1.62, 1.88], [2.62, 2.88]],
     decay: [0.05, 0.13], noise: [0.15, 0.40], bright: [0.60, 0.95],
     blurb: '短促，最扎耳朵' },
+  /* 一串脚步，不是一记：单记要短、步与步之间要留空档，两记挨着放会糊成
+     一片持续的隆隆，人耳立刻判定这是设备。参数与 Swift 侧同一张表。 */
+  { id: 'step', name: '脚步', base: [45, 70],
+    ratios: [[1.30, 1.50], [1.75, 1.95]],
+    decay: [0.08, 0.14], noise: [0.50, 0.90], bright: [0.05, 0.15],
+    blurb: '楼上走动的一串咚咚', cadence: [1.2, 2.2], level: [0.78, 1.0] },
 ];
 const forgeKind = id => FORGE_KINDS.find(k => k.id === id) || FORGE_KINDS[0];
 
@@ -3239,6 +3245,8 @@ const FORGE_PM1 = [-1, 1];
    🔴 泛音比故意**不成整数倍** —— 成了就是乐音，而乐音是另一个品类。 */
 function forgeRender(kind, seed) {
   const g = forgeRng(BigInt(seed));
+  // 分流必须在掷第一颗骰子之前，理由见 Swift 侧同一处注释。
+  if (kind.cadence) return forgeSteps(kind, seed, g);
   const f0 = fpick(g, kind.base);
   const partials = [f0].concat(kind.ratios.map(r => f0 * fpick(g, r)));
   const dec = fpick(g, kind.decay);
@@ -3268,6 +3276,62 @@ function forgeRender(kind, seed) {
     for (let i = 0; i < n; i++) out[i] *= scale;
   }
   return { kind, seed, f0, duration, samples: out };
+}
+
+/* 一串脚步：和上面同一套模态合成，只是每记更短、更闷，按步频落在时间轴上，
+   每步音量浮动一点（轻重脚）。随机消耗顺序与 Swift 的 renderSteps 一致：
+   步频 → 步数 → 每步（基频、泛音、衰减、亮度、噪声、音量）。 */
+function forgeSteps(kind, seed, g) {
+  const rate = fpick(g, kind.cadence);
+  const steps = Math.round(fpick(g, [6, 14]));
+  const level = kind.level || [0.8, 1.0];
+  const lead = 0.15, hits = [];
+  let t = lead, firstHz = 0;
+  for (let i = 0; i < steps; i++) {
+    const f0 = fpick(g, kind.base);
+    if (i === 0) firstHz = f0;
+    const partials = [f0].concat(kind.ratios.map(r => f0 * fpick(g, r)));
+    const dec = fpick(g, kind.decay);
+    const bright = fpick(g, kind.bright);
+    const decays = partials.map((_, k) => dec * Math.pow(bright, k));
+    const gains = partials.map((_, k) => Math.pow(bright, k * 0.8));
+    const noise = fpick(g, kind.noise);
+    const gain = fpick(g, level);
+    const dur = Math.min(1, dec * 3.2 + 0.05);
+    const n = Math.trunc(FORGE_SR * dur), hit = new Float32Array(n);
+    let lp = 0;
+    for (let j = 0; j < n; j++) {
+      const tt = j / FORGE_SR;
+      let v = 0;
+      for (let k = 0; k < partials.length; k++)
+        v += gains[k] * Math.sin(2 * Math.PI * partials[k] * tt) * Math.exp(-tt / decays[k]);
+      lp += 0.3 * (fpick(g, FORGE_PM1) - lp);
+      v += noise * lp * Math.exp(-tt / (dec * 0.12));
+      hit[j] = v * gain;
+    }
+    // 尾巴 15 ms 收掉：截断就是台阶，低频上一个台阶 = 一声「咔哒」。
+    const fade = Math.min(n, Math.trunc(0.015 * FORGE_SR));
+    if (fade > 1) for (let j = 0; j < fade; j++) hit[n - fade + j] *= 1 - j / fade;
+    hits.push([t, hit]);
+    t += 1 / rate;
+  }
+  const total = Math.min(8, Math.max(3, t + 0.25));
+  const n = Math.trunc(FORGE_SR * total), out = new Float32Array(n);
+  for (const [at, hit] of hits) {
+    const off = Math.trunc(at * FORGE_SR);
+    for (let j = 0; j < hit.length; j++) {
+      const k = off + j;
+      if (k >= n) break;
+      out[k] += hit[j];
+    }
+  }
+  let peak = 0;
+  for (let i = 0; i < n; i++) peak = Math.max(peak, Math.abs(out[i]));
+  if (peak > 1e-9) {
+    const scale = Math.fround(Math.fround(0.89) / peak);
+    for (let i = 0; i < n; i++) out[i] *= scale;
+  }
+  return { kind, seed, f0: firstHz, duration: total, samples: out };
 }
 
 /* 16-bit 单声道 WAV。一两秒的东西没有体积问题，无损意味着反复散布不会叠加编码代数。 */
