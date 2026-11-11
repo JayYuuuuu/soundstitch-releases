@@ -468,6 +468,8 @@ nav .ni{font-size:16px;line-height:1}
 .pickrow.on .ord{background:var(--accent);color:#fff}
 .pickrow .mid{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
 .pickrow .nm{font-size:15px;font-weight:600}
+/* 收藏标记：一行一个字形，不抢名字的位置（名字仍然 ell 截断）。 */
+.pickrow .nm .fav{color:var(--warn);font-style:normal;font-size:13px;margin-right:4px}
 .pickrow .sub{font-size:11px;color:var(--t2);font-family:var(--mono)}
 /* 24 小时带子：把「什么时候响」变成一个位置问题。规则卡上 16px，编辑表单里 44px，
    里面的块是同一份 `stripBlocks()` 画的——两处各画一遍必然分家。 */
@@ -848,9 +850,11 @@ nav .ni{font-size:16px;line-height:1}
         <div class="h1">选素材，各放几遍</div>
         <div class="h2" id="fpPickSum">还没选</div>
       </div>
-      <div class="pad" style="flex:none;padding-top:10px;padding-bottom:8px">
-        <label class="search"><span style="color:var(--t3)">⌕</span>
+      <div class="pad" style="flex:none;padding-top:10px;padding-bottom:8px;display:flex;gap:8px;align-items:center">
+        <label class="search" style="flex:1"><span style="color:var(--t3)">⌕</span>
           <input id="fpQ" placeholder="找素材" autocomplete="off"></label>
+        <button class="chip" id="fpFavOnly" aria-pressed="false" title="只看收藏过的素材">
+          <span class="cname">收藏</span></button>
       </div>
       <div class="pad scroll" style="flex:1;min-height:0;padding-bottom:8px">
         <div class="list" id="fpList"></div>
@@ -3659,7 +3663,7 @@ const FP_SEQ = '自由排', FP_RND = '自由排*';
 const FP_ITEMS_MAX = 20000, FP_BUDGET = FP_ITEMS_MAX * 0.95;
 const fpBytes = a => new TextEncoder().encode(JSON.stringify(a)).length;
 const isFree = s => s.mode === 'once' && String(s.endTime || '').startsWith('自由排');
-const FP = { pick: [], order: 'seq', mins: 30, q: '', gapOn: false, gapSec: 30 };
+const FP = { pick: [], order: 'seq', mins: 30, q: '', gapOn: false, gapSec: 30, onlyFav: false };
 
 /* ---------- 段间停顿 ----------
  * 用户要的是「排完几条，中间自己留空，而且完全没有规律」。
@@ -3788,17 +3792,21 @@ $('#fpCancel').onclick = () => $('#mFree').classList.add('hide');
 $('#fpBack').onclick = () => { $('#fp1').classList.remove('hide'); $('#fp2').classList.add('hide'); };
 $('#fpNext').onclick = () => { $('#fp1').classList.add('hide'); $('#fp2').classList.remove('hide'); renderFP2(); };
 $('#fpQ').oninput = e => { FP.q = e.target.value; renderFP(); };
+$('#fpFavOnly').onclick = () => { FP.onlyFav = !FP.onlyFav; renderFP(); };
 
 function renderFP() {
   const box = $('#fpList');
   box.innerHTML = '';
-  const rows = S.items.filter(i => matchQ(i.name, FP.q));
+  const rows = S.items.filter(i => matchQ(i.name, FP.q) && (!FP.onlyFav || favOn(i.id)));
+  const favBtn = $('#fpFavOnly');
+  favBtn.classList.toggle('sel', FP.onlyFav);
+  favBtn.setAttribute('aria-pressed', FP.onlyFav ? 'true' : 'false');
   for (const it of rows) {
     const idx = FP.pick.findIndex(p => p.id === it.id), p = idx < 0 ? null : FP.pick[idx];
     const row = document.createElement('div');
     row.className = 'pickrow' + (p ? ' on' : '');
     row.innerHTML = `<div class="ord">${p ? idx + 1 : ''}</div>
-      <div class="mid"><div class="nm ell">${esc(it.name)}</div>
+      <div class="mid"><div class="nm ell">${favOn(it.id) ? '<i class="fav" title="已收藏">★</i>' : ''}${esc(it.name)}</div>
         <div class="sub">${dur(it.duration)} · ${size(it.fileSize)}</div></div>
       <div class="step"><button ${p ? '' : 'disabled'}>−</button><span>${p ? p.n : 1}</span>
         <button ${p ? '' : 'disabled'}>+</button></div>`;
@@ -3808,6 +3816,10 @@ function renderFP() {
     dec.onclick = e => { e.stopPropagation(); fpBump(it.id, -1); };
     inc.onclick = e => { e.stopPropagation(); fpBump(it.id, 1); };
     box.appendChild(row);
+  }
+  if (!rows.length) {
+    box.innerHTML = `<div class="empty"><div class="h">${FP.onlyFav ? '还没有收藏的素材' : '没有匹配的素材'}</div>` +
+      (FP.onlyFav ? `<div style="font-size:13px;color:var(--t2)">在素材列表里点某条右侧 ⋯ 收藏</div>` : '') + `</div>`;
   }
   const round = fpRound();
   $('#fpPickSum').innerHTML = FP.pick.length
@@ -4340,7 +4352,7 @@ function renderPick() {
     const row = document.createElement('div');
     row.className = 'pickrow' + (p ? ' on' : '');
     row.innerHTML = `<div class="ord">${p ? idx + 1 : ''}</div>
-      <div class="mid"><div class="nm ell">${esc(it.name)}</div>
+      <div class="mid"><div class="nm ell">${favOn(it.id) ? '<i class="fav" title="已收藏">★</i>' : ''}${esc(it.name)}</div>
         <div class="sub">${dur(it.duration)} · ${size(it.fileSize)}</div></div>
       <div class="step"><button ${p ? '' : 'disabled'}>−</button><span>${p ? p.n : 1}</span>
         <button ${p ? '' : 'disabled'}>+</button></div>`;
