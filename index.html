@@ -685,6 +685,7 @@ nav .ni{font-size:16px;line-height:1}
         <button class="btn sec" style="height:48px;font-size:16px">改名</button>
         <button class="btn sec" style="height:48px;font-size:16px">上传到共享</button>
         <button class="btn danger" style="height:48px;font-size:16px">从控制端移除</button>
+        <button class="btn danger" style="height:48px;font-size:16px">连文件一起删</button>
       </div>
     </div>
   </div>
@@ -1138,6 +1139,8 @@ const canRoute = p => p && atLeast(p.appVersion, '0.27.0');
 const canShare = p => p && atLeast(p.appVersion, '0.29.0');
 // 抓链接由被控端自己下载（音频要落在它的盘上），老版本收到 fetch 会回「不认识的指令」。
 const canFetch = p => p && atLeast(p.appVersion, '0.30.0');
+// 连文件一起删是 0.40.0 才有的指令：老版本收到 purge 会回「不认识的指令」。
+const canPurge = p => p && atLeast(p.appVersion, '0.40.0');
 /* 🔴 合成由**要播它的那台 Mac** 做，不是浏览器。fish.audio 一个 CORS 头都不给
    （2026-09-01 在 200 和 402 两种响应上各验过一次），而且 key 写进这个文件
    等于公开 —— 控制台是个谁都打得开的地址。 */
@@ -1146,6 +1149,7 @@ const canFetch = p => p && atLeast(p.appVersion, '0.30.0');
  * 🔴 加了新的版本卡点就往这里补一条，否则设备弹窗会说「一切正常」，
  * 而按钮那边照样是灰的，两处对不上比不说更糟。 */
 const FEATURES = [
+  { min: '0.40.0', name: '连文件一起删（进废纸篓）' },
   { min: '0.38.0', name: '纯低频测试音' },
   { min: '0.37.0', name: '调频率试震感' },
   { min: '0.36.0', name: '唤醒音箱' },
@@ -1550,6 +1554,9 @@ function logRow(t) {
  * 抓链接要下完整段视频再分离音轨，共享要传/收整个文件。
  * 用同一个期限的结果是机器干得好好的，控制端已经红字说它没回应。 */
 const CMD_LIMIT = { fetch: 180000, share: 120000, pull: 120000, speak: 120000,
+                   /* 移进废纸篓是本地一次 rename，比删行还快；给它宽一点只因为
+                    * 文件可能在另一块盘上，慢盘上 rename 会变得很慢。 */
+                   purge: 20000,
                    /* 🔴 极短音效的回执是**故意**延后的：0.31.1 起 Mac 端会等 10 秒
                     * 以内的素材播完再回执，好把「响了 N 次」写进结论里 —— 否则
                     * 回执写在 play() 之后 0 ms，那时没有任何证据，而心跳要十几秒
@@ -2452,7 +2459,7 @@ function openItemMenu(it) {
   const p = current(), manage = canManage(p), share = canShare(p);
   $('#itemMenuName').textContent = it.name;
   $('#itemMenuMeta').textContent = `${dur(it.duration)} · ${size(it.fileSize)}`;
-  const [bFav, bRen, bShare, bDel] = $$('#itemMenuBtns button');
+  const [bFav, bRen, bShare, bDel, bPurge] = $$('#itemMenuBtns button');
   bFav.textContent = favOn(it.id) ? '取消收藏' : '收藏';
   bFav.onclick = () => { setFav(it.id, !favOn(it.id)); closeItemMenu(); renderItems(); };
   bRen.disabled = !manage; bRen.textContent = manage ? '改名' : '改名（设备需更新）';
@@ -2464,6 +2471,17 @@ function openItemMenu(it) {
   bDel.onclick = () => {
     if (bDel.dataset.armed) { closeItemMenu(); return cmd('forget', { itemId: it.id, localPath: it.localPath }); }
     bDel.dataset.armed = '1'; bDel.textContent = '确认移除（不删 Mac 上的文件）';
+  };
+  /* 连文件一起删：和「移除」是两条指令，不是一个开关。走的是新指令 purge，
+     老 Mac 不认识，所以按版本卡住 —— 灰着比点了没反应强。
+     🔴 两段式确认沿用移除那套：第一下只是换文案，第二下才真发。 */
+  delete bPurge.dataset.armed;
+  const purgeReady = canPurge(p);
+  bPurge.disabled = !purgeReady;
+  bPurge.textContent = purgeReady ? '连文件一起删' : '连文件一起删（设备需更新）';
+  bPurge.onclick = () => {
+    if (bPurge.dataset.armed) { closeItemMenu(); return cmd('purge', { itemId: it.id, localPath: it.localPath }); }
+    bPurge.dataset.armed = '1'; bPurge.textContent = '确认：文件进废纸篓（能还原）';
   };
   $('#mItem').classList.remove('hide');
 }
