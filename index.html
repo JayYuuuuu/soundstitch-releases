@@ -1045,15 +1045,19 @@ const hhmm = t => { const p = String(t || '').split(':'); return p.length === 2 
  * 🔴 以前「今天过了起始时间就直接跳到明天」——一条每小时响一次的规则，
  * 10 点看它会说「明天 08:00」，而它 11 点就要响。重复次数一多这就全错。 */
 function nextSlotToday(s, now) {
-  const sl = takeSlots(s, now);
-  if (!sl) return null;
   const midnight = Date.parse(cnParts(now).date + 'T00:00:00+08:00');
-  const t = (now.getTime() - sl.anchor) / 1000;
-  for (const begin of sl.at) {
-    if (begin > t) return Math.round((sl.anchor + begin * 1000 - midnight) / 60000);
+  let best = null;
+  // 昨晚那份（跨过零点还没响完的）和今天这份一起看，取最早的那一次。
+  for (const sl of liveSlots(s, now)) {
+    const t = (now.getTime() - sl.anchor) / 1000;
+    for (const begin of sl.at) {
+      if (begin > t) { const at = sl.anchor + begin * 1000; if (best == null || at < best) best = at; break; }
+    }
   }
-  return null;
+  return best == null ? null : Math.round((best - midnight) / 60000);
 }
+/* nextSlotToday 的分钟数可以超过 1440（今晚开始、过了零点的那几次），拆成「第几天 + 当天第几分」 */
+const splitDay = m => m >= 1440 ? { at: m - 1440, days: 1 } : { at: m, days: 0 };
 
 /* 未来某一天的第一次。波动的种子里有日期，所以要按那天算，不是按今天。
  *
@@ -1082,24 +1086,26 @@ function nextFire(s, now = new Date()) {
     if (!s.date) return null;
     const days = Math.round((Date.parse(s.date + 'T00:00:00Z') -
                              Date.parse(nowP.date + 'T00:00:00Z')) / 86400000);
-    if (days < 0) return { expired: true };
-    if (days === 0) {
+    if (days < -1) return { expired: true };
+    if (days <= 0) {
+      // days === -1：昨天那条一次性规则，凌晨可能还有没响完的几次
       if (liveTake(s, now)) return { at: nowP.minutes, days: 0, live: true };
       const nx = nextSlotToday(s, now);
-      return nx == null ? { expired: true } : { at: nx, days: 0, live: false };
+      return nx == null ? { expired: true } : { ...splitDay(nx), live: false };
     }
     return { at: firstSlotOn(s, s.date), days, live: false };
   }
 
   for (let d = 0; d < 8; d++) {
     const p = cnParts(new Date(now.getTime() + d * 86400000));
-    if (s.weekdays && s.weekdays.length && !s.weekdays.includes(p.weekday)) continue;
+    // 今天先不看星期：今天不是执行日，昨晚那份也可能还跨着零点在响（liveSlots 自己按星期判）
     if (d === 0) {
       if (liveTake(s, now)) return { at: start, days: 0, live: true };
       const nx = nextSlotToday(s, now);
-      if (nx != null) return { at: nx, days: 0, live: false };
+      if (nx != null) return { ...splitDay(nx), live: false };
       continue;                                  // 今天的都放完了，看明天
     }
+    if (s.weekdays && s.weekdays.length && !s.weekdays.includes(p.weekday)) continue;
     return { at: firstSlotOn(s, p.date), days: d, live: false };
   }
   return null;
@@ -1141,6 +1147,8 @@ const canShare = p => p && atLeast(p.appVersion, '0.29.0');
 const canFetch = p => p && atLeast(p.appVersion, '0.30.0');
 // 连文件一起删是 0.40.0 才有的指令：老版本收到 purge 会回「不认识的指令」。
 const canPurge = p => p && atLeast(p.appVersion, '0.40.0');
+// 0.41.0 之前的 Mac 只看当天的落点：过了零点，昨晚开始的那几次全丢。
+const crossesDay = p => p && atLeast(p.appVersion, '0.41.0');
 /* 🔴 合成由**要播它的那台 Mac** 做，不是浏览器。fish.audio 一个 CORS 头都不给
    （2026-09-01 在 200 和 402 两种响应上各验过一次），而且 key 写进这个文件
    等于公开 —— 控制台是个谁都打得开的地址。 */
@@ -1149,6 +1157,7 @@ const canPurge = p => p && atLeast(p.appVersion, '0.40.0');
  * 🔴 加了新的版本卡点就往这里补一条，否则设备弹窗会说「一切正常」，
  * 而按钮那边照样是灰的，两处对不上比不说更糟。 */
 const FEATURES = [
+  { min: '0.41.0', name: '定时跨零点（晚上开始、凌晨接着响）' },
   { min: '0.40.0', name: '连文件一起删（进废纸篓）' },
   { min: '0.38.0', name: '纯低频测试音' },
   { min: '0.37.0', name: '调频率试震感' },
@@ -1198,14 +1207,21 @@ const cnTime = v => {
 const stopAt = (sl, begin) => Math.min(begin + sl.length, sl.until ?? Infinity);
 
 function liveTake(s, now = new Date()) {
-  const slots = takeSlots(s, now);
-  if (!slots) return null;
-  const t = (now.getTime() - slots.anchor) / 1000;
-  for (let i = 0; i < slots.at.length; i++) {
-    const begin = slots.at[i];
-    if (t >= begin && t < stopAt(slots, begin)) return { elapsed: t - begin, take: i };
+  for (const slots of liveSlots(s, now)) {
+    const t = (now.getTime() - slots.anchor) / 1000;
+    for (let i = 0; i < slots.at.length; i++) {
+      const begin = slots.at[i];
+      if (t >= begin && t < stopAt(slots, begin)) return { elapsed: t - begin, take: i, day: slots.day };
+    }
   }
   return null;
+}
+
+/* 🔴 能覆盖「此刻」的落点有两份：昨天开始的和今天开始的。Mac 端 liveSlots 的孪生。
+   22:59 起每小时一次 × 8 = 22:59 … 05:59，过了零点只看今天的锚点（今晚 22:59）
+   就会说「还没到」，凌晨那 6 次全丢（2026-11-15 Air15 实测只响了 2 次）。 */
+function liveSlots(s, now = new Date()) {
+  return [takeSlots(s, new Date(now.getTime() - 86400000)), takeSlots(s, now)].filter(Boolean);
 }
 
 
@@ -1214,11 +1230,11 @@ function liveTake(s, now = new Date()) {
  * 🔴 故意**不看** pausedTake：控制端必须分得清「没在播」和「被叫停了」——
  * 前者是故障要报红，后者是用户自己按的，报红就是在骂人。 */
 function currentTakeAt(s, now = new Date()) {
-  const sl = takeSlots(s, now);
-  if (!sl) return null;
-  const t = (now.getTime() - sl.anchor) / 1000;
-  for (const begin of sl.at) {
-    if (t >= begin && t < stopAt(sl, begin)) return Math.round((sl.anchor + begin * 1000) / 1000);
+  for (const sl of liveSlots(s, now)) {
+    const t = (now.getTime() - sl.anchor) / 1000;
+    for (const begin of sl.at) {
+      if (t >= begin && t < stopAt(sl, begin)) return Math.round((sl.anchor + begin * 1000) / 1000);
+    }
   }
   return null;
 }
@@ -1247,9 +1263,9 @@ function takeSlots(s, now = new Date()) {
 
   if (s.mode === 'window') {
     const end = hhmm(s.endTime);
-    // 跨午夜的窗口 Mac 端就不支持（要求 end > start），这里跟着它，别自作主张
-    if (end == null || end <= start) return null;
-    const span = (end - start) * 60;
+    if (end == null || end === start) return null;
+    // 结束早于开始 = 跨午夜（23:00–06:30），结束落在第二天。和 Mac 端同一条规则。
+    const span = ((end - start + 1440) % 1440) * 60;
     // 不设每次时长 = 老行为：整段循环到结束时间
     if (!length) return { anchor, day: p.date, length: span, at: [0], until: span };
     // 设了就是「时段内每隔 N 播一次」：和 daily 同一套排布，次数由时段长度定，
@@ -1291,6 +1307,7 @@ function runDays(s, now = new Date()) {
 function consumedAt(s, index, now = new Date()) {
   const length = s.playSeconds > 0 ? s.playSeconds : 0;
   if (!s.continuous || !length) return 0;
+  // now 要传落点所属那天（凌晨那几次属于昨天），和 Mac 端 consumed(…, now: s.anchor) 同口径
   const sl = takeSlots({ ...s, enabled: true, weekdays: [], localPath: s.localPath || '/x' }, now);
   const perDay = Math.max(1, s.mode === 'window' ? (sl ? sl.at.length : 1) : (s.repeatCount || 1));
   return (runDays(s, now) * perDay + index) * length;
@@ -3805,8 +3822,10 @@ function fpConcl() {
           (over ? ` · 跨午夜的部分不播` : ''), over ? 'warn' : ''];
 }
 const minsLabel = () => FP.mins ? (FP.mins % 60 ? FP.mins + ' 分钟' : FP.mins / 60 + ' 小时') : '不限时';
-/* once 规则认日期：跨过午夜那部分 Mac 不会播，这话必须在按下之前说。 */
+/* 0.41.0 之前的 Mac 过了零点就停：跨过去那部分不会播，这话必须在按下之前说。
+   新版本跨零点照常播，不提醒。 */
 function crossesMidnight(sec) {
+  if (crossesDay(current())) return false;
   const p = cnParts(new Date());
   return p.minutes * 60 + sec > 86400;
 }
@@ -4133,8 +4152,9 @@ function stripBlocks(s) {
     const sl = takeSlots({ ...s, enabled: true, weekdays: [], localPath: s.localPath || '/x' });
     const wide = Math.max(0.4, pct((s.playSeconds || 60) / 60));   // 宽度按时长，不是死 2px
     const at = sl ? sl.at : [0];
+    // 过了零点的那几次绕回条的左端（它们在第二天凌晨响）
     for (let i = 0; i < at.length && i < 120; i++)
-      out += `<b${cls} style="left:${pct(start + at[i] / 60)}%;width:${wide}%"></b>`;
+      out += `<b${cls} style="left:${pct(((start + at[i] / 60) % 1440 + 1440) % 1440)}%;width:${wide}%"></b>`;
   }
   return out + `<u class="now" style="left:${pct(cnParts(new Date()).minutes)}%"></u>`;
 }
@@ -4316,12 +4336,16 @@ function syncRule() {
 }
 function ruleConcl(d, sl) {
   if (!F.pick.length) return ['还没选内容', 'bad'];
-  if (F.mode === 'window' && !(hhmm(d.endTime) > hhmm(d.startTime))) return ['结束早于开始', 'bad'];
+  if (F.mode === 'window' && hhmm(d.endTime) === hhmm(d.startTime)) return ['开始和结束是同一时刻', 'bad'];
   const span = F.pick.reduce((t, p) => {
     const it = S.items.find(x => x.id === p.id); return t + (it ? (it.duration || 0) * p.n : 0); }, 0);
   const times = sl ? sl.at.length : 1;
   const each = F.play > 0 ? F.play : span;
   const head = `共 ${fmt(span)}`;
+  // 老版本 Mac 过了零点就不认昨晚的落点 —— 排到凌晨的那几次会静默丢掉，按下之前就说
+  const st = hhmm(d.startTime) ?? 0;
+  const spill = (sl && sl.at.some(a => st * 60 + a >= 86400)) || (F.mode === 'window' && hhmm(d.endTime) < st);
+  if (spill && !crossesDay(current())) return [`有几次排到了零点之后 · 这台 Mac 要更新到 0.41.0 才会接着响`, 'warn'];
   if (!F.play) return [`${head} · 整段放完，一天 ${times} 次`, ''];
   if (span < each) return [`${head}，不够 ${fmt(each)} · 会循环滚动`, 'warn'];
   return [`${head} · 每次放 ${fmt(each)}，一天 ${times} 次`, ''];
