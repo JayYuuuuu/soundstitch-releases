@@ -2030,8 +2030,7 @@ function ago(s) {
   return (h < 10 ? h.toFixed(1) : Math.round(h)) + ' 小时前';
 }
 
-/* 唤醒音箱：点一下 → Mac 往音箱送一段听不见的底噪，30 分钟内音箱都醒着；
-   放过任何一条也会自动保温 5 分钟。灯只信服务端报上来的 `warm`，
+/* 唤醒音箱：手动开启后最多持续 30 分钟。灯只信服务端报上来的 `warm`，
    但点下那一刻先乐观地变过去（S.wakeReq），不等往返 —— 和打击垫同一条「跟手」。 */
 const canWake = p => !!p && atLeast(p.appVersion, '0.36.0');
 function wakePhase(p) {
@@ -2060,9 +2059,10 @@ function renderWake(p) {
   const hm = until ? until.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false }) : '';
   b.title = !p ? '' : !ok ? `这台 Mac 是 ${p.appVersion || '?'}，唤醒音箱要 0.36.0：在那台 Mac 上点「检查更新」`
     : !live ? '设备不在线'
-    : ph === 'ready' ? `音箱醒着，放什么都不会吞掉开头${hm ? ` · 保持到 ${hm}` : ''} · 再点一下关掉`
-    : ph === 'waking' ? '正在往音箱送一段听不见的底噪，一两秒后就绪'
-    : '蓝牙音箱睡着时会吞掉开头半秒。放之前先点一下，绿了再放（放过之后也会自动保温 5 分钟）';
+    : ph === 'ready' ? `正在持续送低电平信号${hm ? ` · 保持到 ${hm}` : ''} · 再点一下关掉`
+    : ph === 'waking' ? '正在向音箱发送唤醒信号'
+    : atLeast(p.appVersion, '0.41.1') ? '播放时会短暂预热。点这里可让音箱持续保持唤醒 30 分钟'
+    : '点一下可唤醒音箱 30 分钟。这版声拼播完还会自动保温 5 分钟';
 }
 $('#bWake').onclick = () => {
   const p = current(); if (!p || !isLive(p) || !canWake(p)) return;
@@ -3470,9 +3470,12 @@ function openTone() {
   S.toneMsg = '';
   $('#mForge').classList.add('hide');
   $('#mTone').classList.remove('hide');
-  // 进来就把音箱叫醒：试频率要的是每一下都完整，第一下被吞就白比了
+  // 没有开播预热的旧版仍需要先唤醒。新版等真的播放才发短信号。
   const p = current();
-  if (isLive(p) && canWake(p) && !p.warm) { S.wakeReq = { on: true, at: Date.now() }; cmd('wake'); }
+  if (isLive(p) && canWake(p) && !atLeast(p.appVersion, '0.39.0') && !p.warm) {
+    S.wakeReq = { on: true, at: Date.now() };
+    cmd('wake');
+  }
 }
 $('#bToneOpen').onclick = openTone;
 $('#toneClose').onclick = () => { stopSweep(); $('#mTone').classList.add('hide'); };
