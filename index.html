@@ -649,9 +649,17 @@ nav .ni{font-size:16px;line-height:1}
   <div class="sheet">
     <div class="shead"><span></span><span class="ttl ell" id="itemMenuName" style="max-width:70%">—</span>
       <button class="strong" id="itemMenuClose">完成</button></div>
-    <div class="sbody">
+    <div class="sbody scroll">
       <div id="itemMenuMeta" class="mono" style="font-size:12px;color:var(--t2);text-align:center">—</div>
+      <div id="itemAudition" class="hide" style="display:grid;gap:9px">
+        <div id="itemAuditionStatus" class="concl mut" role="status"></div>
+        <audio id="itemAuditionAudio" class="hide" style="width:100%" controls preload="none"
+               controlslist="nodownload noremoteplayback" disableremoteplayback
+               aria-label="在这台设备试听"></audio>
+        <button id="itemAuditionRetry" class="btn sec hide">重试试听</button>
+      </div>
       <div id="itemMenuBtns" style="display:flex;flex-direction:column;gap:9px">
+        <button id="bItemAudition" class="btn sec" style="height:48px;font-size:16px">在这台设备试听</button>
         <button class="btn sec" style="height:48px;font-size:16px">收藏</button>
         <button class="btn sec" style="height:48px;font-size:16px">改名</button>
         <button class="btn sec" style="height:48px;font-size:16px">上传到共享</button>
@@ -1124,6 +1132,7 @@ const canFetch = p => p && atLeast(p.appVersion, '0.30.0');
 const canPurge = p => p && atLeast(p.appVersion, '0.40.0');
 // 0.41.0 之前的 Mac 只看当天的落点：过了零点，昨晚开始的那几次全丢。
 const crossesDay = p => p && atLeast(p.appVersion, '0.41.0');
+const AUDITION_VERSION = '0.42.0';
 /* 🔴 合成由**要播它的那台 Mac** 做，不是浏览器。fish.audio 一个 CORS 头都不给
    （2026-09-01 在 200 和 402 两种响应上各验过一次），而且 key 写进这个文件
    等于公开 —— 控制台是个谁都打得开的地址。 */
@@ -1132,6 +1141,7 @@ const crossesDay = p => p && atLeast(p.appVersion, '0.41.0');
  * 🔴 加了新的版本卡点就往这里补一条，否则设备弹窗会说「一切正常」，
  * 而按钮那边照样是灰的，两处对不上比不说更糟。 */
 const FEATURES = [
+  { min: AUDITION_VERSION, name: '在控制端试听本机素材' },
   { min: '0.41.2', name: '移除音箱持续保温' },
   { min: '0.41.0', name: '定时跨零点（晚上开始、凌晨接着响）' },
   { min: '0.40.0', name: '连文件一起删（进废纸篓）' },
@@ -1619,6 +1629,7 @@ function watch(id, limit = 8000, after = null) {
 /* 指令到终态了就收尾。SSE 和兜底轮询都走这里——两条路一份逻辑，否则迟早分家，
  * 而分家的那份恰好是不常走的那份。返回真 = 这条已经了结，别再跟了。 */
 function settleCommand(rec) {
+  if (S.localAudition?.accept?.(rec)) return true;
   if (!S.watch || !rec || rec.id !== S.watch.id) return false;
   if (rec.status === 'done') {
     // 🔴 先把回调取出来再清 S.watch —— 清完就没得取了。
@@ -1649,7 +1660,7 @@ function giveUp(id, msg) {
 }
 /* 声拼控制台 v2 —— 按设计稿 A1–A10 实现（项目「音频编辑器界面设计方案」）。
  *
- * 遥控器，不是播放器：音频和蓝牙音箱都在 Mac 那边，这里只写记录。
+ * 普通播放驱动 Mac 上的音频和音箱；在控制端试听时，浏览器自己播。
  * 单文件、零依赖、零构建，和 Mac 端同一原则。
  *
  * v2 只重写了**视图层**。所有和 Mac 端孪生的算术原样保留（见下面那段），
@@ -1672,6 +1683,7 @@ const S = {
   openRow: null, q: '', pos: null, volHeld: false, volPending: null,
   seekHeld: false, seek: null,
   audio: null, auditioning: null, auditionErr: '', auditionErrID: null, auditionTimer: null,
+  localAudition: null,
   devTarget: null, compact: false, endMode: null, openHist: null, itemSig: null,
   authAt: 0, uid: localStorage.ssUid || '', fish: null, spk: null, spkBusy: false,
   /* 素材栏的视图状态：分类、收藏（id 表）、最近播过（id 队列，新的在前） */
@@ -1820,6 +1832,7 @@ const acctName = () => {
 
 function select(id) {
   if (S.sel === id) return;
+  closeItemMenu();
   $('#itemScroll').scrollTop = 0; setPin(false);
   S.sel = id; localStorage.ssSel = id; S.items = []; S.scheds = []; S.runs = []; S.selItem = null;
   S.openRow = null; S.pos = null;
@@ -2424,10 +2437,17 @@ function renderPadProgress() {
 
 function openItemMenu(it) {
   if (!it) return;
+  resetLocalAudition();
   const p = current(), manage = canManage(p), share = canShare(p);
   $('#itemMenuName').textContent = it.name;
   $('#itemMenuMeta').textContent = `${dur(it.duration)} · ${size(it.fileSize)}`;
-  const [bFav, bRen, bShare, bDel, bPurge] = $$('#itemMenuBtns button');
+  const [bAudition, bFav, bRen, bShare, bDel, bPurge] = $$('#itemMenuBtns button');
+  const supported = atLeast(p?.appVersion, AUDITION_VERSION);
+  const online = isLive(p) || isWaking(p);
+  bAudition.disabled = !supported || !online;
+  bAudition.textContent = !online ? '试听（Mac 离线）'
+    : supported ? '在这台设备试听' : '试听（Mac 需更新）';
+  bAudition.onclick = $('#itemAuditionRetry').onclick = () => localAudition(it, p.id);
   bFav.textContent = favOn(it.id) ? '取消收藏' : '收藏';
   bFav.onclick = () => { setFav(it.id, !favOn(it.id)); closeItemMenu(); renderItems(); };
   bRen.disabled = !manage; bRen.textContent = manage ? '改名' : '改名（设备需更新）';
@@ -2453,7 +2473,7 @@ function openItemMenu(it) {
   };
   $('#mItem').classList.remove('hide');
 }
-function closeItemMenu() { $('#mItem').classList.add('hide'); }
+function closeItemMenu() { $('#mItem').classList.add('hide'); resetLocalAudition(); }
 $('#itemMenuClose').onclick = closeItemMenu;
 $('#mItem').onclick = e => { if (e.target.id === 'mItem') closeItemMenu(); };
 function renameItem(it) {
@@ -2559,6 +2579,110 @@ function auditionFailed(id, why) {
 function stopAudition() {
   if (S.audio) { S.audio.pause(); S.audio = null; }
   S.auditioning = null;
+}
+
+function resetLocalAudition() {
+  const job = S.localAudition;
+  if (job) {
+    S.localAudition = null;
+    job.controller.abort();
+    job.audio.onplay = job.audio.onerror = null;
+    job.audio.pause();
+    job.audio.removeAttribute('src');
+    job.audio.load();
+    if (job.objectURL) URL.revokeObjectURL(job.objectURL);
+  }
+  $('#itemAudition').classList.add('hide');
+  $('#itemMenuBtns').classList.remove('hide');
+}
+
+/* 试听单独等回执，与同一页面上尚未完成的播放或定时指令互不顶掉。 */
+function waitForAudition(path, id, job) {
+  const signal = job.controller.signal;
+  return new Promise((resolve, reject) => {
+    let timer;
+    const finish = (callback, value) => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', abort);
+      job.accept = null;
+      callback(value);
+    };
+    const abort = () => finish(reject, signal.reason);
+    job.accept = rec => {
+      if (rec?.id !== id || rec.status === 'pending') return false;
+      if (rec.status === 'done' && rec.auditionFile) finish(resolve, rec.auditionFile);
+      else finish(reject, new Error(rec.result || 'Mac 没有返回试听音频'));
+      return true;
+    };
+    const poll = async () => {
+      const rec = await api(path, { signal }).catch(() => null);
+      if (job.accept && !job.accept(rec)) timer = setTimeout(poll, 1500);
+    };
+    if (signal.aborted) abort();
+    else {
+      signal.addEventListener('abort', abort, { once: true });
+      timer = setTimeout(poll, 600);
+    }
+  });
+}
+
+async function localAudition(it, player) {
+  resetLocalAudition();
+  stopAudition();
+  const audio = $('#itemAuditionAudio'), status = $('#itemAuditionStatus'), retry = $('#itemAuditionRetry');
+  const job = { audio, controller: new AbortController() };
+  const { controller } = job, signal = controller.signal;
+  S.localAudition = job;
+  $('#itemMenuBtns').classList.add('hide');
+  $('#itemAudition').classList.remove('hide');
+  retry.classList.add('hide');
+  audio.classList.add('hide');
+  status.classList.remove('bad');
+  status.textContent = '正在从 Mac 准备试听…';
+  const active = () => S.localAudition === job;
+  const failed = why => {
+    if (!active()) return;
+    status.textContent = why;
+    status.classList.add('bad');
+    audio.classList.add('hide');
+    retry.classList.remove('hide');
+  };
+  const timeout = setTimeout(() => controller.abort(new Error('Mac 未及时返回试听，请重试')), 95000);
+  const base = '/api/collections/ss_commands/records';
+  let path;
+  try {
+    const record = await api(base, { method: 'POST', signal, body: JSON.stringify({
+      player, action: 'audition', status: 'pending', auditionOwner: S.uid,
+      payload: { itemId: it.id, localPath: it.localPath },
+    }) });
+    path = base + '/' + encodeURIComponent(record.id);
+    const file = await waitForAudition(path, record.id, job);
+    const { token } = await api('/api/files/token', { method: 'POST', signal });
+    const url = `${S.url}/api/files/ss_commands/${encodeURIComponent(record.id)}/${encodeURIComponent(file)}?token=${encodeURIComponent(token)}`;
+    const response = await fetch(url, { signal, cache: 'no-store', referrerPolicy: 'no-referrer' });
+    if (!response.ok) throw new Error('试听音频下载失败，请重试');
+    const blob = await response.blob();
+    if (!active()) return;
+
+    job.objectURL = URL.createObjectURL(blob);
+    const label = it.duration > 30 ? '前 30 秒 · 在这台设备试听' : '在这台设备试听';
+    audio.onplay = () => { if (active()) status.textContent = label; };
+    audio.onerror = () => failed('这台设备无法播放试听音频');
+    audio.src = job.objectURL;
+    audio.classList.remove('hide');
+    status.textContent = label;
+    // Safari may require a fresh gesture after the network round trip.
+    audio.play().catch(error => {
+      if (!active() || audio.error) return;
+      if (error.name === 'NotAllowedError') status.textContent = '试听已就绪，点下方播放';
+    });
+  } catch (error) {
+    const why = signal.aborted ? signal.reason : error;
+    failed(why?.status ? '无法连接试听服务，请重试' : why?.message || '试听失败，请重试');
+  } finally {
+    clearTimeout(timeout);
+    if (path) api(path, { method: 'DELETE' }).catch(() => {});
+  }
 }
 
 /* ---------- 下载音频 / 上传 ---------- */
