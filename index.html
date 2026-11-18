@@ -2611,7 +2611,11 @@ async function openSpeak() {
   setTimeout(() => $('#speakText').focus(), 60);
   const { voices, presetsMissing } = await loading;
   if (S.speakVoiceLoad !== loading) return;
-  select.replaceChildren(...voices.map(({ name, id }) => new Option(name, id)));
+  select.replaceChildren(...voices.map(({ name, id, defaultTag }) => {
+    const option = new Option(name, id);
+    if (defaultTag) option.dataset.defaultTag = defaultTag;
+    return option;
+  }));
   S.speakVoiceLoad = null;
   if (presetsMissing && !$('#mSpeak').classList.contains('hide')) {
     $('#speakErr').textContent = '音色列表暂时没加载出来，仍可用默认音色';
@@ -3093,12 +3097,14 @@ async function speakGenerate() {
   const voice = $('#speakVoice').selectedOptions[0];
   if (!voice) return;
   const { value: voiceId, text: voiceName } = voice;
+  const { defaultTag } = voice.dataset;
+  const synthesisText = defaultTag && !text.startsWith(defaultTag) ? defaultTag + text : text;
   const take = (S.spk ? S.spk.take : 0) + 1;
   dropTake();
   const request = S.spkRequest = new AbortController();
   S.spkBusy = true; $('#speakErr').classList.add('hide'); speakCount();
   try {
-    const blob = await speakSynthesize(text, voiceId, S.speakSpeed, request.signal);
+    const blob = await speakSynthesize(synthesisText, voiceId, S.speakSpeed, request.signal);
     const url = URL.createObjectURL(blob);
     const audio = new Audio(url);
     const d = await new Promise(res => {
