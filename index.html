@@ -265,6 +265,10 @@ input{font:inherit;color:inherit}
 .linput{height:48px;border-radius:12px;background:var(--card);border:.5px solid var(--line2);
         padding:0 14px;font-size:15px;outline:none;width:100%}
 .linput:focus{border:1.5px solid var(--accent)}
+.voice-field{display:flex;align-items:center;gap:12px;flex:none}
+.voice-field label{color:var(--t2);font-weight:600;white-space:nowrap}
+.voice-field select{flex:1;min-width:0;font-family:inherit;color:var(--t1);color-scheme:light dark}
+.voice-field select:disabled{color:var(--t2)}
 /* 标签胶囊：点一下插到光标处。🔴 用按钮说话，不用一段说明文字讲「你可以打
    [angry]」—— 需要靠文字才看得懂的功能是交互设计出了问题。 */
 .tagrow{display:flex;flex-wrap:wrap;gap:6px}
@@ -712,6 +716,10 @@ nav .ni{font-size:16px;line-height:1}
   <div class="sheet">
     <div class="shead"><button id="speakCancel">取消</button><span class="ttl">生成语音</span><span class="ph"></span></div>
     <div class="sbody scroll">
+      <div class="voice-field">
+        <label for="speakVoice">音色</label>
+        <select id="speakVoice" class="linput" disabled></select>
+      </div>
       <textarea id="speakText" class="linput" rows="3" placeholder="打一句要说的话"
         style="resize:none;line-height:1.6;padding:10px 12px;height:auto;font-family:inherit"></textarea>
       <div class="tagrow"><button class="mini acc" id="bSpeakAi">骂回去</button><button class="mini acc" id="bSpeakTag">加语气</button></div>
@@ -2588,31 +2596,68 @@ $('#bFetch').onclick = () => {
 const SPEAK_MAX = 500;
 const FISH_MODEL = 's2.1-pro-free';   // 🔴 只有这个是免费的；s1 / speech-1.6 一律 402
 
-function openSpeak() {
+async function openSpeak() {
   $('#speakText').value = '';
   $('#speakErr').classList.add('hide');
   dropTake();
   S.dsSeed = ''; S.dsOut = '';
   renderSpeakTags();
   renderSpeakSpeed();
-  renderAi();
-  renderTag();
+  const select = $('#speakVoice');
+  select.replaceChildren(new Option('正在载入音色…'));
+  const loading = S.speakVoiceLoad = loadSpeakVoices();
   speakCount();
   $('#mSpeak').classList.remove('hide');
   setTimeout(() => $('#speakText').focus(), 60);
+  const { voices, presetsMissing } = await loading;
+  if (S.speakVoiceLoad !== loading) return;
+  select.replaceChildren(...voices.map(({ name, id }) => new Option(name, id)));
+  S.speakVoiceLoad = null;
+  if (presetsMissing && !$('#mSpeak').classList.contains('hide')) {
+    $('#speakErr').textContent = '音色列表暂时没加载出来，仍可用默认音色';
+    $('#speakErr').classList.remove('hide');
+  }
+  speakCount();
+}
+
+// 只在打开弹窗时加载预设。账号原先配置的音色始终排在第一位。
+let speakVoicePresets;
+async function loadSpeakVoices() {
+  speakVoicePresets ||= fetch('./speech-voices.json').then(async r => {
+    if (!r.ok) throw new Error('音色列表加载失败');
+    const voices = await r.json();
+    if (!Array.isArray(voices)) throw new Error('音色列表格式错误');
+    return voices;
+  }).catch(() => {
+    speakVoicePresets = null;
+    return [];
+  });
+  const [settings, presets] = await Promise.all([
+    speakSettings().catch(() => null),
+    speakVoicePresets,
+  ]);
+  const id = settings?.voice || '';
+  const first = presets.find(voice => voice.id === id) || { id, name: '默认音色' };
+  return { voices: [first, ...presets.filter(voice => voice.id !== id)], presetsMissing: !presets.length };
 }
 
 /* 一行结论：还差多少 / 超了多少 / 这一版存下来会去哪。超上限时把按钮也关掉。 */
 function speakCount() {
   const n = $('#speakText').value.trim().length, el = $('#speakCount'), go = $('#bSpeakGo');
   const has = !!S.spk;
+  const saving = S.spkBusy && has;
+  $('#speakVoice').disabled = saving || !!S.speakVoiceLoad;
+  $('#speakText').readOnly = saving;
+  $('#speakCancel').disabled = saving;
   el.className = 'concl ' + (n > SPEAK_MAX ? 'bad' : 'mut');
   el.textContent = n > SPEAK_MAX ? `${n} 字，超过 ${SPEAK_MAX} 字上限`
     : has ? speakSaveNote()
     : !n ? '还没输入' : `${n} / ${SPEAK_MAX} 字`;
-  go.disabled = S.spkBusy || S.dsBusy || S.tagBusy || (!has && (!n || n > SPEAK_MAX));
+  go.disabled = S.spkBusy || S.dsBusy || S.tagBusy || !!S.speakVoiceLoad || (!has && (!n || n > SPEAK_MAX));
   go.textContent = S.spkBusy ? '生成中…' : has ? '存下来' : '生成';
   $('#bSpeakAgain').classList.toggle('hide', !has || S.spkBusy);
+  renderAi();
+  renderTag();
 }
 /* 存下来会发生什么，说在按下之前。 */
 function speakSaveNote() {
@@ -2663,7 +2708,7 @@ function renderSpeakSpeed() {
       `<button type="button" data-v="${v}" title="说这句话的快慢。${zh}=正常的 ${Math.round(100 / v)}% 时长">${zh}</button>`).join('');
     box.onclick = e => {
       const b = e.target.closest('button[data-v]');
-      if (!b || Number(b.dataset.v) === S.speakSpeed) return;
+      if (!b || (S.spkBusy && S.spk) || Number(b.dataset.v) === S.speakSpeed) return;
       S.speakSpeed = Number(b.dataset.v);
       localStorage.ssSpeakSpeed = String(S.speakSpeed);
       // 🔴 换了语速，上一版当场作废 —— 和「改了输入框」同一条：留着它
@@ -2678,12 +2723,13 @@ function renderSpeakSpeed() {
    官方例句 "I can't believe it [gasp] you actually did it [laugh]" 正是如此。 */
 function insertTag(tag) {
   const t = $('#speakText');
+  if (t.readOnly) return;
   const a = t.selectionStart != null ? t.selectionStart : t.value.length;
   const b = t.selectionEnd != null ? t.selectionEnd : a;
   t.value = t.value.slice(0, a) + tag + t.value.slice(b);
   const pos = a + tag.length;
   t.focus(); t.setSelectionRange(pos, pos);
-  speakCount();
+  t.oninput();
 }
 /* ---------- 让 DeepSeek 把一句流水账改成阴阳话 ---------- */
 /* 🔴 **浏览器直接调，不用像 fish 那样在自家 Caddy 上转一道** —— DeepSeek 给全
@@ -2851,12 +2897,12 @@ function renderAi() {
 }
 async function speakAi() {
   const raw = $('#speakText').value.trim();
-  if (!raw || S.dsBusy) return;
+  if (!raw || S.dsBusy || S.tagBusy || S.spkBusy) return;
   // 🔴 「再来一版」拿的是**原话**，不是拿上一版的阴阳话再阴阳一遍 ——
   // 那样每按一次就离你要说的事更远一点。
   const seed = (S.dsOut && raw === S.dsOut && S.dsSeed) ? S.dsSeed : raw;
   const angle = pickAngle(S.dsAngle);
-  S.dsBusy = true; $('#speakErr').classList.add('hide'); renderAi(); speakCount();
+  S.dsBusy = true; $('#speakErr').classList.add('hide'); speakCount();
   try {
     let line = await dsWrite(seed, angle);
     // 烂比方就地重摇一次（换个角度，免得原地打转）
@@ -2872,7 +2918,7 @@ async function speakAi() {
     $('#speakErr').textContent = String(e.message || e);
     $('#speakErr').classList.remove('hide');
   } finally {
-    S.dsBusy = false; renderAi(); speakCount();
+    S.dsBusy = false; speakCount();
   }
 }
 
@@ -2946,7 +2992,7 @@ async function speakTag() {
   const base = stripTags(raw).replace(/\s+/g, ' ').trim();
   if (!base) return;
   S.tagBusy = true; $('#speakErr').classList.add('hide');
-  renderTag(); renderAi(); speakCount();
+  speakCount();
   try {
     let line = keepTags(base, dsText(await dsChat(TAG_SYSTEM, base)));
     // 改了词就整版作废、再问一次；第二次还改就说出来，绝不悄悄采用。
@@ -2960,32 +3006,31 @@ async function speakTag() {
     $('#speakErr').textContent = String(e.message || e);
     $('#speakErr').classList.remove('hide');
   } finally {
-    S.tagBusy = false; renderTag(); renderAi(); speakCount();
+    S.tagBusy = false; speakCount();
   }
 }
 
 /* ---------- 合成：走自家转发，音频落在浏览器里 ---------- */
-/* key 和音色存在服务端（`ss_settings`），不烧进代码也不进 App：安装包在公开
-   仓库里，烧进去等于发布这个 key。换音色因此不用发版。 */
+/* key 和账号默认音色存在服务端（`ss_settings`），密钥不得进源码或安装包。 */
 async function speakSettings() {
   if (S.fish) return S.fish;
   const r = await api('/api/collections/ss_settings/records?perPage=1');
   const it = (r.items || [])[0] || {};
   if (!it.fishKey) throw new Error('服务端还没填 fish.audio 的 key');
   // DeepSeek 的 key 和模型住在同一条记录里：一次请求读完，也省得两处缓存过期。
-  S.fish = { key: it.fishKey, voice: it.fishVoice || '',
+  S.fish = { key: it.fishKey, voice: (it.fishVoice || '').trim(),
              dsKey: it.dsKey || '', dsModel: it.dsModel || DS_MODEL };
   return S.fish;
 }
-async function speakSynthesize(text) {
+async function speakSynthesize(text, voice, speed, signal) {
   const f = await speakSettings();
   const body = { text, format: 'wav' };      // 🔴 要 WAV：这段还要被散布、导出时
-  if (f.voice) body.reference_id = f.voice;  // 再编一次 AAC，没理由先白扔一代
+  if (voice || f.voice) body.reference_id = voice || f.voice;
   // 🔴 正常语速**一个字节都不多写**：请求体和加这功能之前逐字节一致，
   // 所以没选语速的人不可能被这次改动影响。
-  if (S.speakSpeed !== 1) body.prosody = { speed: S.speakSpeed };
+  if (speed !== 1) body.prosody = { speed };
   const r = await fetch('/fish/v1/tts', {
-    method: 'POST', headers: { 'Content-Type': 'application/json',
+    method: 'POST', signal, headers: { 'Content-Type': 'application/json',
       Authorization: 'Bearer ' + f.key, model: FISH_MODEL },
     body: JSON.stringify(body) });
   if (!r.ok) throw new Error(speakFail(r.status));
@@ -3008,13 +3053,16 @@ function speakFail(status) {
    侧栏那一行再也说不清这条是什么（Mac 端踩过同一个坑，规则照它来）。 */
 function speakTitle(text) {
   const spoken = String(text).replace(/\[[^\]]*\]/g, ' ')
-    .replace(/[\p{P}\p{S}]/gu, ' ').replace(/\s+/g, ' ').trim();
-  if (!spoken) return '语音';
-  return spoken.length > 14 ? spoken.slice(0, 14).trim() + '…' : spoken;
+    .replace(/[<>:"/\\|?*\p{Cc}]/gu, ' ').replace(/\s+/g, ' ').trim();
+  if (!/[^\p{P}\p{S}\s]/u.test(spoken)) return '语音';
+  const characters = [...spoken];
+  return characters.length > 14 ? characters.slice(0, 14).join('').trimEnd() + '…' : spoken;
 }
 
 /* 试听品的生死：换文字、重来、关弹窗，都要把它扔掉并把 blob URL 收回来。 */
 function dropTake() {
+  S.spkRequest?.abort();
+  S.spkRequest = null;
   if (S.spk) { try { S.spk.audio.pause(); } catch {} URL.revokeObjectURL(S.spk.url); }
   S.spk = null; S.spkBusy = false;
   $('#speakTry').classList.add('hide');
@@ -3041,12 +3089,16 @@ function renderTake() {
 
 async function speakGenerate() {
   const text = $('#speakText').value.trim();
-  if (!text || text.length > SPEAK_MAX) return;
+  if (!text || text.length > SPEAK_MAX || S.spkBusy || S.dsBusy || S.tagBusy || S.speakVoiceLoad) return;
+  const voice = $('#speakVoice').selectedOptions[0];
+  if (!voice) return;
+  const { value: voiceId, text: voiceName } = voice;
   const take = (S.spk ? S.spk.take : 0) + 1;
   dropTake();
+  const request = S.spkRequest = new AbortController();
   S.spkBusy = true; $('#speakErr').classList.add('hide'); speakCount();
   try {
-    const blob = await speakSynthesize(text);
+    const blob = await speakSynthesize(text, voiceId, S.speakSpeed, request.signal);
     const url = URL.createObjectURL(blob);
     const audio = new Audio(url);
     const d = await new Promise(res => {
@@ -3054,9 +3106,10 @@ async function speakGenerate() {
       audio.onerror = () => res(0);
       setTimeout(() => res(audio.duration || 0), 4000);
     });
-    S.spk = { blob, url, audio, dur: isFinite(d) ? d : 0, text, take };
+    if (request.signal.aborted) { URL.revokeObjectURL(url); return; }
+    S.spk = { blob, url, audio, dur: isFinite(d) ? d : 0, text, take, voiceName };
     audio.onended = renderTake;
-    audio.ontimeupdate = () => { if (!S.spk) return; $('#speakSub').textContent =
+    audio.ontimeupdate = () => { if (S.spk?.audio !== audio) return; $('#speakSub').textContent =
       `在这台设备上播放 ${fmt(audio.currentTime)} / ${dur(S.spk.dur)}`; };
     S.spkBusy = false;
     renderTake();
@@ -3064,10 +3117,13 @@ async function speakGenerate() {
     // 就把骰子和答案隔开了。iOS 会拦下自动播放，拦了就静静停在「试听」。
     audio.play().then(renderTake).catch(() => {});
   } catch (e) {
+    if (request.signal.aborted) return;
     S.spkBusy = false;
     $('#speakErr').textContent = String(e.message || e);
     $('#speakErr').classList.remove('hide');
     speakCount();
+  } finally {
+    if (S.spkRequest === request) S.spkRequest = null;
   }
 }
 
@@ -3076,7 +3132,7 @@ async function speakSave() {
   const s = S.spk; if (!s || S.spkBusy) return;
   S.spkBusy = true; $('#speakErr').classList.add('hide'); speakCount();
   try {
-    const name = speakTitle(s.text);
+    const name = `${s.voiceName}-${speakTitle(s.text)}`;
     // 🔴 **文件名只剩前 14 个字，而阴阳话的力道全在后半句。** 存之前它只活在
     // 输入框里，存完就再也找不回来了——想知道这条说了什么只能一条条听。
     // `source` 是那句原始流水账：有它才知道这句是从哪儿改来的，也才能重编。
@@ -3108,7 +3164,7 @@ S.speakPull = localStorage.ssSpeakPull !== '0';
 // 免得 localStorage 被写坏之后每次合成都带一个 fish 会拒绝的参数。
 S.speakSpeed = SPEAK_SPEEDS.some(([, v]) => v === Number(localStorage.ssSpeakSpeed))
   ? Number(localStorage.ssSpeakSpeed) : 1;
-S.spk = null; S.spkBusy = false;
+S.spk = null; S.spkBusy = false; S.spkRequest = null; S.speakVoiceLoad = null;
 $('#speakPullRow').onclick = () => {
   S.speakPull = !S.speakPull;
   localStorage.ssSpeakPull = S.speakPull ? '1' : '0';
@@ -3118,10 +3174,13 @@ $('#speakPullRow').onclick = () => {
 // 和输入框里不一样的音频（「抓完之后主按钮变完成」同一条理由）。
 $('#bSpeakAi').onclick = speakAi;
 $('#bSpeakTag').onclick = speakTag;
+$('#speakVoice').onchange = () => {
+  dropTake();
+  $('#speakErr').classList.add('hide');
+  speakCount();
+};
 $('#speakText').oninput = () => {
-  if (S.spk && $('#speakText').value.trim() !== S.spk.text) dropTake();
-  renderAi();
-  renderTag();
+  if (S.spkRequest || (S.spk && $('#speakText').value.trim() !== S.spk.text)) dropTake();
   speakCount();
 };
 $('#bSpeakPlay').onclick = () => {
